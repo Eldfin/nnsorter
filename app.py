@@ -76,7 +76,7 @@ if not GOOGLE_API_KEY:
     st.error("Kein Google API Key gefunden. Bitte als Streamlit Secret oder Environment Variable setzen.")
     st.stop()
 
-# ----------------- Geocoding-Funktion (Google API, schnell) -----------------
+# ----------------- Geocoding-Funktion (Google API) -----------------
 def geocode_address_google(address: str):
     g = GoogleV3(api_key=GOOGLE_API_KEY, timeout=10)
     loc = g.geocode(address)
@@ -89,10 +89,20 @@ home_addr = st.text_input("Home-Adresse (Start-Adresse)", value=HOME_ADDRESS_DEF
 
 with st.form(key="input_form"):
     uploaded_file = st.file_uploader("adressen.txt / adressen.csv hochladen", type=["txt","csv"])
-    st.markdown("oder")
-    text_input = st.text_area("Adressen (eine pro Zeile)", height=200, placeholder="Vohwinkeler Str. 107, 42329 Wuppertal, Germany\nBundesallee 76, 42103 Wuppertal, Germany\n...")
     
-    st.markdown("**Priorisierte Adressen** (optional, diese werden zuerst besucht, eine pro Zeile):")
+    # Vorbefüllen des Textfeldes, wenn Datei hochgeladen
+    prefill_text = ""
+    if uploaded_file is not None:
+        try:
+            file_addresses = parse_addresses_from_file(uploaded_file)
+            prefill_text = "\n".join(file_addresses)
+        except Exception as e:
+            st.error(f"Fehler beim Lesen der Datei: {e}")
+    
+    st.markdown("**Adressen (eine pro Zeile)**")
+    text_input = st.text_area("Adressen", height=200, value=prefill_text, placeholder="Vohwinkeler Str. 107, 42329 Wuppertal, Germany\nBundesallee 76, 42103 Wuppertal, Germany\n...")
+    
+    st.markdown("**Priorisierte Adressen (optional, diese werden zuerst besucht, eine pro Zeile):**")
     priority_input = st.text_area("Priorisierte Adressen", height=100, placeholder="Adresse 1\nAdresse 2\n...")
 
     submit = st.form_submit_button("Sortieren")
@@ -102,18 +112,9 @@ if not submit:
     st.stop()
 
 # ----------------- Adressen sammeln -----------------
-addresses = []
-if uploaded_file is not None:
-    try:
-        addresses = parse_addresses_from_file(uploaded_file)
-    except Exception as e:
-        st.error(f"Fehler beim Lesen der Datei: {e}")
-        st.stop()
-else:
-    addresses = parse_addresses_from_text(text_input)
-
+addresses = parse_addresses_from_text(text_input)
 if not addresses:
-    st.warning("Keine Adressen eingegeben. Bitte Adressen eingeben oder Datei hochladen.")
+    st.warning("Keine Adressen eingegeben.")
     st.stop()
 
 st.write("Start (Home):", home_addr)
@@ -155,10 +156,10 @@ with st.spinner("Geokodieren..."):
         except Exception as e:
             st.warning(f"Priorisierte Adresse konnte nicht geokodiert werden und wird ignoriert: {addr} → {e}")
 
-    # Entferne priorisierte Adressen aus normalen Zielen
+    # Entferne priorisierte Adressen aus normalen Zielen (falls doppelt vorhanden)
     remaining_coords_map = {a: coords_map[a] for a in coords_map if a not in [p[0] for p in priority_coords]}
 
-    # Starte NN-Sortierung ab der letzten priorisierten Adresse
+    # NN-Sortierung ab der letzten priorisierten Adresse
     if priority_coords:
         start_coord_nn = priority_coords[-1][1]
     else:
