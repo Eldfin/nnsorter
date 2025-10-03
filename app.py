@@ -8,7 +8,7 @@ from typing import List, Tuple
 import os
 
 # ----------------- KONFIGURATION -----------------
-HOME_ADDRESS_DEFAULT = "Vohwinkeler Str. 107, 42329 Wuppertal, Germany"
+HOME_ADDRESS_DEFAULT = "Rudolf-Diesel-Straße 2, 35463 Fernwald, Germany"
 # -------------------------------------------------
 
 st.set_page_config(page_title="NN-Sortierer (Streamlit)", layout="centered")
