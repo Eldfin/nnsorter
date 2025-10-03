@@ -1,0 +1,2 @@
+streamlit>=1.20
+geopy>=2.3
