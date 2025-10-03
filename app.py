@@ -98,11 +98,8 @@ def generate_csv_bytes(data_list: List[str]) -> bytes:
 # Home-Adresse (sichtbar und editierbar im Hauptbereich)
 home_addr = st.text_input("Home-Adresse (Start-Adresse)", value=HOME_ADDRESS_DEFAULT)
 
-st.markdown("---")
-st.markdown("**Eingabe:** lade eine Datei hoch (txt/csv) oder füge Adressen ins Textfeld ein (eine Adresse pro Zeile).")
-
 with st.form(key="input_form"):
-    uploaded_file = st.file_uploader("adressen.txt / adressen.csv hochladen (optional)", type=["txt", "csv"])
+    uploaded_file = st.file_uploader("adressen.txt / adressen.csv hochladen", type=["txt", "csv"])
     st.markdown("oder")
     text_input = st.text_area("Adressen (eine pro Zeile)", height=200, placeholder="Vohwinkeler Str. 107, 42329 Wuppertal, Germany\nBundesallee 76, 42103 Wuppertal, Germany\n...")
     submit = st.form_submit_button("Sortieren")
