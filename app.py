@@ -76,7 +76,7 @@ if not GOOGLE_API_KEY:
     st.error("Kein Google API Key gefunden. Bitte als Streamlit Secret oder Environment Variable setzen.")
     st.stop()
 
-# ----------------- Geocoding-Funktion (Google API) -----------------
+# ----------------- Geocoding-Funktion -----------------
 def geocode_address_google(address: str):
     g = GoogleV3(api_key=GOOGLE_API_KEY, timeout=10)
     loc = g.geocode(address)
@@ -84,28 +84,23 @@ def geocode_address_google(address: str):
         raise ValueError(f"Adresse nicht gefunden: {address}")
     return (loc.latitude, loc.longitude)
 
-# ----------------- UI: Home-Adresse + Formular -----------------
-home_addr = st.text_input("Home-Adresse (Start-Adresse)", value=HOME_ADDRESS_DEFAULT)
+# ----------------- UI: Home-Adresse + Adresseneingabe -----------------
+home_addr = st.text_input("Home-Adresse (Startpunkt)", value=HOME_ADDRESS_DEFAULT)
 
-with st.form(key="input_form"):
-    uploaded_file = st.file_uploader("adressen.txt / adressen.csv hochladen", type=["txt","csv"])
-    
-    # Vorbefüllen des Textfeldes, wenn Datei hochgeladen
-    prefill_text = ""
-    if uploaded_file is not None:
-        try:
-            file_addresses = parse_addresses_from_file(uploaded_file)
-            prefill_text = "\n".join(file_addresses)
-        except Exception as e:
-            st.error(f"Fehler beim Lesen der Datei: {e}")
-    
-    st.markdown("**Adressen (eine pro Zeile)**")
-    text_input = st.text_area("Adressen", height=200, value=prefill_text, placeholder="Vohwinkeler Str. 107, 42329 Wuppertal, Germany\nBundesallee 76, 42103 Wuppertal, Germany\n...")
-    
-    st.markdown("**Priorisierte Adressen (optional, diese werden zuerst besucht, eine pro Zeile):**")
-    priority_input = st.text_area("Priorisierte Adressen", height=100, placeholder="Adresse 1\nAdresse 2\n...")
+# Datei hochladen und Textfeld automatisch befüllen
+uploaded_file = st.file_uploader("adressen.txt / adressen.csv hochladen (optional)", type=["txt","csv"])
+prefill_text = ""
+if uploaded_file is not None:
+    try:
+        file_addresses = parse_addresses_from_file(uploaded_file)
+        prefill_text = "\n".join(file_addresses)
+    except Exception as e:
+        st.error(f"Fehler beim Lesen der Datei: {e}")
 
-    submit = st.form_submit_button("Sortieren")
+text_input = st.text_area("Adressen (eine pro Zeile)", height=200, value=prefill_text, placeholder="Adresse 1\nAdresse 2\n...")
+priority_input = st.text_area("Priorisierte Adressen (optional, werden zuerst besucht)", height=100, placeholder="Adresse A\nAdresse B\n...")
+
+submit = st.button("Sortieren")
 
 if not submit:
     st.info("Gib Adressen ein und klicke auf 'Sortieren', um die Reihenfolge zu berechnen.")
@@ -116,9 +111,6 @@ addresses = parse_addresses_from_text(text_input)
 if not addresses:
     st.warning("Keine Adressen eingegeben.")
     st.stop()
-
-st.write("Start (Home):", home_addr)
-st.write(f"Anzahl Ziele: {len(addresses)}")
 
 # ----------------- Geokodierung -----------------
 coords_map = {}
@@ -156,10 +148,10 @@ with st.spinner("Geokodieren..."):
         except Exception as e:
             st.warning(f"Priorisierte Adresse konnte nicht geokodiert werden und wird ignoriert: {addr} → {e}")
 
-    # Entferne priorisierte Adressen aus normalen Zielen (falls doppelt vorhanden)
+    # Restliche Adressen ohne Duplikate der Prioritäten
     remaining_coords_map = {a: coords_map[a] for a in coords_map if a not in [p[0] for p in priority_coords]}
 
-    # NN-Sortierung ab der letzten priorisierten Adresse
+    # NN-Sortierung startet vom letzten priorisierten Punkt oder Home, falls keine Priorität
     if priority_coords:
         start_coord_nn = priority_coords[-1][1]
     else:
@@ -167,11 +159,11 @@ with st.spinner("Geokodieren..."):
 
     sorted_remaining = nearest_neighbor_sort_by_coords(remaining_coords_map, start_coord_nn)
 
-    # Endgültige Route: Home + priorisierte Adressen + restliche Adressen
-    final_route = [home_addr] + [p[0] for p in priority_coords] + sorted_remaining
+    # Endgültige Route = Priorisierte Adressen + restliche Adressen (Home wird nicht in der Liste gezeigt)
+    final_route = [p[0] for p in priority_coords] + sorted_remaining
 
 # ----------------- Ergebnisanzeige + Download -----------------
-st.subheader("Sortierte Adressen (Nearest Neighbor)")
+st.subheader("Sortierte Adressen")
 st.text_area("Ergebnis (eine Adresse pro Zeile)", value="\n".join(final_route), height=250)
 
 col1, col2 = st.columns(2)
