@@ -1,48 +1,36 @@
 # app.py
 import streamlit as st
-from geopy.geocoders import Nominatim
+from geopy.geocoders import Nominatim, GoogleV3
+from geopy.exc import GeocoderUnavailable, GeocoderTimedOut, GeocoderServiceError
 from math import radians, sin, cos, atan2, sqrt
 import time
 import csv
 import io
 from typing import List, Tuple
+import requests
+import os
 
 # ----------------- KONFIGURATION -----------------
-# HOME-Adresse fest im Code (Default). Im UI kannst du sie ändern.
 HOME_ADDRESS_DEFAULT = "Vohwinkeler Str. 107, 42329 Wuppertal, Germany"
-
-# user agent für Nominatim (bitte ggf. deine E-Mail angeben)
-NOMINATIM_USER_AGENT_DEFAULT = "nn_streamlit_app_your_email@example.com"
-
-# Pause zwischen Geocoding-Anfragen (in Sekunden, Default)
 GEOCODE_PAUSE_S_DEFAULT = 1.0
 # -------------------------------------------------
 
 st.set_page_config(page_title="NN-Sortierer (Streamlit)", layout="centered")
 st.title("Nearest-Neighbor Sortierer — Adressen (Text-only)")
 
-st.markdown(
-    """
-    Gib eine Liste von Adressen ein (eine pro Zeile) oder lade eine .txt/.csv Datei hoch.
-    """
-)
-
-# Sidebar: Parameter (Pause / user-agent)
+# Sidebar: Pause
 st.sidebar.header("Einstellungen")
 pause_s = st.sidebar.number_input("Pause zwischen Geocoding-Requests (s)", value=GEOCODE_PAUSE_S_DEFAULT, min_value=0.0, step=0.1)
-user_agent = st.sidebar.text_input("Nominatim user-agent (empfohlen: Email)", value=NOMINATIM_USER_AGENT_DEFAULT)
 
-# ------- Hilfsfunktionen -------
+# ---------- Hilfsfunktionen ----------
 def parse_addresses_from_file(f) -> List[str]:
     content = f.read().decode("utf-8")
-    lines = [line.strip() for line in content.splitlines() if line.strip()]
-    return lines
+    return [line.strip() for line in content.splitlines() if line.strip()]
 
 def parse_addresses_from_text(t: str) -> List[str]:
     return [line.strip() for line in t.splitlines() if line.strip()]
 
 def parse_latlon_line(line: str):
-    # prüfe Format lat,lon,label
     parts = [p.strip() for p in line.split(",")]
     if len(parts) >= 2:
         try:
@@ -53,14 +41,6 @@ def parse_latlon_line(line: str):
         except ValueError:
             return None
     return None
-
-@st.cache_data(show_spinner=False)
-def geocode_address_cached(address: str, user_agent_local: str) -> Tuple[float, float]:
-    geolocator = Nominatim(user_agent=user_agent_local)
-    loc = geolocator.geocode(address, timeout=10)
-    if loc is None:
-        raise ValueError(f"Geokodierung fehlgeschlagen für: {address}")
-    return (loc.latitude, loc.longitude)
 
 def haversine_km(a: Tuple[float,float], b: Tuple[float,float]) -> float:
     R = 6371.0
@@ -84,8 +64,7 @@ def nearest_neighbor_sort_by_coords(coords_map: dict, start_coord: Tuple[float,f
     return route
 
 def generate_txt(data_list: List[str]) -> bytes:
-    txt = "\n".join(data_list)
-    return txt.encode("utf-8")
+    return "\n".join(data_list).encode("utf-8")
 
 def generate_csv_bytes(data_list: List[str]) -> bytes:
     buf = io.StringIO()
@@ -94,23 +73,58 @@ def generate_csv_bytes(data_list: List[str]) -> bytes:
         writer.writerow([r])
     return buf.getvalue().encode("utf-8")
 
-# ------- UI: Home-Feld + Formular mit Submit-Button -------
-# Home-Adresse (sichtbar und editierbar im Hauptbereich)
-home_addr = st.text_input("Home-Adresse (Start-Adresse)", value=HOME_ADDRESS_DEFAULT)
+# --------- Google API Key aus Secrets ----------
+def get_google_api_key():
+    if hasattr(st, "secrets") and "GOOGLE_API_KEY" in st.secrets:
+        return st.secrets["GOOGLE_API_KEY"]
+    return os.environ.get("GOOGLE_API_KEY")
+
+GOOGLE_API_KEY = get_google_api_key()
+if not GOOGLE_API_KEY:
+    st.error("Kein Google API Key gefunden. Bitte als Streamlit Secret oder Environment Variable setzen.")
+    st.stop()
+
+# --------- Geocoding-Funktion mit Fallback ----------
+def geocode_address(address: str, pause_s_local: float = 1.0):
+    # 1) Nominatim versuchen
+    try:
+        nom = Nominatim(user_agent="nn_streamlit_app", timeout=10)
+        loc = nom.geocode(address, timeout=10)
+        if loc:
+            time.sleep(pause_s_local)
+            return (loc.latitude, loc.longitude)
+    except (GeocoderUnavailable, GeocoderTimedOut, GeocoderServiceError, requests.exceptions.RequestException):
+        pass  # fallback
+
+    # 2) Google Maps
+    try:
+        g = GoogleV3(api_key=GOOGLE_API_KEY, timeout=10)
+        loc = g.geocode(address)
+        if loc:
+            time.sleep(pause_s_local)
+            return (loc.latitude, loc.longitude)
+        else:
+            raise ValueError(f"Google: Adresse nicht gefunden: {address}")
+    except Exception as e:
+        raise RuntimeError(f"Geokodierung fehlgeschlagen für '{address}': {e}")
+
+# --------- UI: Home-Adresse + Formular ---------
+home_addr = st.text_input("Home-Adresse (wird nur zum Sortieren verwendet)", value=HOME_ADDRESS_DEFAULT)
+
+st.markdown("---")
+st.markdown("**Eingabe:** lade eine Datei hoch (txt/csv) oder füge Adressen ins Textfeld ein (eine Adresse pro Zeile).")
 
 with st.form(key="input_form"):
-    uploaded_file = st.file_uploader("adressen.txt / adressen.csv hochladen", type=["txt", "csv"])
+    uploaded_file = st.file_uploader("adressen.txt / adressen.csv hochladen (optional)", type=["txt","csv"])
     st.markdown("oder")
     text_input = st.text_area("Adressen (eine pro Zeile)", height=200, placeholder="Vohwinkeler Str. 107, 42329 Wuppertal, Germany\nBundesallee 76, 42103 Wuppertal, Germany\n...")
     submit = st.form_submit_button("Sortieren")
 
-# Wenn nicht gesendet, nichts weiter tun
 if not submit:
     st.info("Gib Adressen ein und klicke auf 'Sortieren', um die Reihenfolge zu berechnen.")
     st.stop()
 
-# ----- Verarbeitung nach Klick -----
-# Adressen sammeln
+# --------- Adressen sammeln ---------
 addresses = []
 if uploaded_file is not None:
     try:
@@ -128,11 +142,11 @@ if not addresses:
 st.write("Start (Home):", home_addr)
 st.write(f"Anzahl Ziele: {len(addresses)}")
 
+# --------- Geokodierung ---------
 coords_map = {}
 geocode_errors = []
 
 with st.spinner("Geokodieren und sortieren..."):
-    # 1) Adressen parsen/geokodieren
     for line in addresses:
         parsed = parse_latlon_line(line)
         if parsed:
@@ -140,29 +154,25 @@ with st.spinner("Geokodieren und sortieren..."):
             coords_map[label] = (lat, lon)
         else:
             try:
-                latlon = geocode_address_cached(line, user_agent)
-                coords_map[line] = latlon
-                time.sleep(pause_s)
+                coords_map[line] = geocode_address(line, pause_s)
             except Exception as e:
                 geocode_errors.append((line, str(e)))
 
-    # Home geokodieren (oder als lat,lon)
+    # Home-Adresse geokodieren
     home_parsed = parse_latlon_line(home_addr)
     if home_parsed:
         home_coord = (home_parsed[0], home_parsed[1])
     else:
         try:
-            home_coord = geocode_address_cached(home_addr, user_agent)
-            time.sleep(pause_s)
+            home_coord = geocode_address(home_addr, pause_s)
         except Exception as e:
             st.error(f"Home-Geokodierung fehlgeschlagen: {e}")
             st.stop()
 
-    # Fehler anzeigen (Adressen ignorieren, die nicht geokodiert wurden)
     if geocode_errors:
-        st.warning("Einige Adressen konnten nicht geokodet werden und werden ignoriert:")
+        st.warning("Einige Adressen konnten nicht geokodiert werden und werden ignoriert:")
         for ln, err in geocode_errors:
-            st.write(f"- {ln}  →  {err}")
+            st.write(f"- {ln} → {err}")
 
     valid_coords_map = {a: coords_map[a] for a in coords_map.keys() if a not in [e[0] for e in geocode_errors]}
 
@@ -170,10 +180,9 @@ with st.spinner("Geokodieren und sortieren..."):
         st.error("Keine gültigen geokodierten Adressen vorhanden.")
         st.stop()
 
-    # Nearest-Neighbor Sort
     sorted_list = nearest_neighbor_sort_by_coords(valid_coords_map, home_coord)
 
-# Ergebnis anzeigen + Download
+# --------- Ergebnisanzeige + Download ---------
 st.subheader("Sortierte Adressen (Nearest Neighbor)")
 st.text_area("Ergebnis (eine Adresse pro Zeile)", value="\n".join(sorted_list), height=250)
 
