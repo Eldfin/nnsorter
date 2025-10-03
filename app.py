@@ -24,7 +24,6 @@ st.title("Nearest-Neighbor Sortierer — Adressen (Text-only)")
 st.markdown(
     """
     Gib eine Liste von Adressen ein (eine pro Zeile) oder lade eine .txt/.csv Datei hoch.
-    Die **Home-Adresse** wird zum Sortieren verwendet, erscheint aber **nicht** in der Ausgabe.
     """
 )
 
@@ -97,7 +96,7 @@ def generate_csv_bytes(data_list: List[str]) -> bytes:
 
 # ------- UI: Home-Feld + Formular mit Submit-Button -------
 # Home-Adresse (sichtbar und editierbar im Hauptbereich)
-home_addr = st.text_input("Home-Adresse (wird nur zum Sortieren verwendet)", value=HOME_ADDRESS_DEFAULT)
+home_addr = st.text_input("Home-Adresse (Start-Adresse)", value=HOME_ADDRESS_DEFAULT)
 
 st.markdown("---")
 st.markdown("**Eingabe:** lade eine Datei hoch (txt/csv) oder füge Adressen ins Textfeld ein (eine Adresse pro Zeile).")
