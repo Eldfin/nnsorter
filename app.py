@@ -91,6 +91,10 @@ with st.form(key="input_form"):
     uploaded_file = st.file_uploader("adressen.txt / adressen.csv hochladen", type=["txt","csv"])
     st.markdown("oder")
     text_input = st.text_area("Adressen (eine pro Zeile)", height=200, placeholder="Vohwinkeler Str. 107, 42329 Wuppertal, Germany\nBundesallee 76, 42103 Wuppertal, Germany\n...")
+    
+    st.markdown("**Priorisierte Adressen** (optional, diese werden zuerst besucht, eine pro Zeile):")
+    priority_input = st.text_area("Priorisierte Adressen", height=100, placeholder="Adresse 1\nAdresse 2\n...")
+
     submit = st.form_submit_button("Sortieren")
 
 if not submit:
@@ -119,7 +123,7 @@ st.write(f"Anzahl Ziele: {len(addresses)}")
 coords_map = {}
 geocode_errors = []
 
-with st.spinner("Geokodieren und sortieren..."):
+with st.spinner("Geokodieren..."):
     for line in addresses:
         parsed = parse_latlon_line(line)
         if parsed:
@@ -142,27 +146,37 @@ with st.spinner("Geokodieren und sortieren..."):
             st.error(f"Home-Geokodierung fehlgeschlagen: {e}")
             st.stop()
 
-    if geocode_errors:
-        st.warning("Einige Adressen konnten nicht geokodiert werden und werden ignoriert:")
-        for ln, err in geocode_errors:
-            st.write(f"- {ln} → {err}")
+    # Priorisierte Adressen
+    priority_list = [line.strip() for line in priority_input.splitlines() if line.strip()]
+    priority_coords = []
+    for addr in priority_list:
+        try:
+            priority_coords.append((addr, geocode_address_google(addr)))
+        except Exception as e:
+            st.warning(f"Priorisierte Adresse konnte nicht geokodiert werden und wird ignoriert: {addr} → {e}")
 
-    valid_coords_map = {a: coords_map[a] for a in coords_map.keys() if a not in [e[0] for e in geocode_errors]}
+    # Entferne priorisierte Adressen aus normalen Zielen
+    remaining_coords_map = {a: coords_map[a] for a in coords_map if a not in [p[0] for p in priority_coords]}
 
-    if not valid_coords_map:
-        st.error("Keine gültigen geokodierten Adressen vorhanden.")
-        st.stop()
+    # Starte NN-Sortierung ab der letzten priorisierten Adresse
+    if priority_coords:
+        start_coord_nn = priority_coords[-1][1]
+    else:
+        start_coord_nn = home_coord
 
-    sorted_list = nearest_neighbor_sort_by_coords(valid_coords_map, home_coord)
+    sorted_remaining = nearest_neighbor_sort_by_coords(remaining_coords_map, start_coord_nn)
+
+    # Endgültige Route: Home + priorisierte Adressen + restliche Adressen
+    final_route = [home_addr] + [p[0] for p in priority_coords] + sorted_remaining
 
 # ----------------- Ergebnisanzeige + Download -----------------
 st.subheader("Sortierte Adressen (Nearest Neighbor)")
-st.text_area("Ergebnis (eine Adresse pro Zeile)", value="\n".join(sorted_list), height=250)
+st.text_area("Ergebnis (eine Adresse pro Zeile)", value="\n".join(final_route), height=250)
 
 col1, col2 = st.columns(2)
 with col1:
-    st.download_button("Download .txt", data=generate_txt(sorted_list), file_name="sortierte_adressen.txt", mime="text/plain")
+    st.download_button("Download .txt", data=generate_txt(final_route), file_name="sortierte_adressen.txt", mime="text/plain")
 with col2:
-    st.download_button("Download .csv", data=generate_csv_bytes(sorted_list), file_name="sortierte_adressen.csv", mime="text/csv")
+    st.download_button("Download .csv", data=generate_csv_bytes(final_route), file_name="sortierte_adressen.csv", mime="text/csv")
 
 st.success("Fertig — die Liste wurde sortiert.")
