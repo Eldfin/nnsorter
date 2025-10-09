@@ -171,7 +171,7 @@ def ocr_image_to_text(image_bytes_io: io.BytesIO) -> str:
 
     raise RuntimeError("Weder pytesseract noch GOOGLE_VISION_API_KEY verfügbar. Bitte Tesseract installieren oder GOOGLE_VISION_API_KEY setzen.")
 
-def extract_address_from_text(text: str):(text: str) -> str:
+def extract_address_from_text(text: str) -> str:
     """Heuristische Extraktion einer Adresse aus OCR-Text.
     Gibt die gefundene Adresse als einzelne Zeile zurück oder None.
     Diese Funktion ist intentionally konservativ; du kannst sie an dein Datenformat anpassen.
