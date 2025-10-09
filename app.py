@@ -10,6 +10,7 @@ import re
 from typing import List, Tuple
 from math import radians, sin, cos, atan2, sqrt
 from PIL import Image, ImageOps
+from urllib.parse import quote_plus
 
 # optional: geopy
 try:
@@ -76,6 +77,27 @@ def generate_csv_bytes(data_list: List[str]) -> bytes:
     for r in data_list:
         writer.writerow([r])
     return buf.getvalue().encode("utf-8")
+
+def make_maps_url_from_route(stop_list: list):
+    """
+    stop_list: Liste von Adress-Strings in Besuchsreihenfolge (erste ... letzte)
+    erzeugt: https://www.google.com/maps/dir/?api=1&destination=LAST&waypoints=WP1|WP2&travelmode=driving
+    Maps nimmt dann automatisch den aktuellen Standort als Start, falls origin weggelassen wird.
+    """
+    if not stop_list:
+        return None
+    # Ziel = letzter Eintrag
+    destination = quote_plus(stop_list[-1])
+    waypoints = ""
+    if len(stop_list) > 1:
+        # Alle Stops außer dem letzten als waypoints
+        w = [quote_plus(s) for s in stop_list[:-1]]
+        waypoints = "|".join(w)
+    base = "https://www.google.com/maps/dir/?api=1"
+    url = f"{base}&destination={destination}&travelmode=driving"
+    if waypoints:
+        url += f"&waypoints={waypoints}"
+    return url
 
 # ----------------- Google Vision OCR -----------------
 def ocr_image_with_google_vision(image_bytes: bytes, api_key: str) -> str:
@@ -257,14 +279,11 @@ st.success("Fertig — die Liste wurde sortiert.")
 
 # ---- Google Maps Route-Link erzeugen ----
 if final_route:
-    # URL-sicher escapen
-    from urllib.parse import quote_plus
-    encoded_stops = [quote_plus(addr) for addr in final_route]
-    maps_url = "https://www.google.com/maps/dir/" + "/".join(encoded_stops)
-
-    st.markdown("### 📍 Route in Google Maps öffnen")
-    st.markdown(
-        f"[👉 Route anzeigen und starten]({maps_url})",
-        unsafe_allow_html=True
-    )
+    maps_url = make_maps_url_from_route(final_route)
+    if maps_url:
+        st.markdown("### Route in Google Maps öffnen")
+        st.write("Tippe den Link auf deinem Handy an — Google Maps sollte deinen aktuellen Standort als Start verwenden.")
+        st.markdown(f"[→ Route in Google Maps öffnen]({maps_url})")
+        # optional: als Button (öffnet im Browser/Maps)
+        st.button("Öffnen (im Browser/Maps)", on_click=lambda: st.experimental_set_query_params(open=maps_url))
 
