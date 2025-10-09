@@ -1,23 +1,22 @@
-# app.py — erweitert um Kamera-OCR-Scanning
-# Deutschsprachige UI
-
+# app.py
+# Streamlit NN-Sortierer mit Kamera-OCR (Google Vision) unter Verwendung eines einzigen GOOGLE_API_KEY
 import streamlit as st
-from geopy.geocoders import GoogleV3
-from math import radians, sin, cos, atan2, sqrt
-import csv
-import io
-from typing import List, Tuple
 import os
-import re
+import io
+import csv
+import base64
+import requests
 import hashlib
+import re
+from typing import List, Tuple
+from math import radians, sin, cos, atan2, sqrt
 
-# --- optionale OCR-Bibliotheken ---
+# Optional: lokale OCR (falls du Tesseract auf dem Host installierst)
 try:
     from PIL import Image, ImageOps
     import pytesseract
     TESSERACT_AVAILABLE = True
     try:
-        # prüfe, ob tesseract-binary vorhanden ist
         _ = pytesseract.get_tesseract_version()
         TESSERACT_BINARY_OK = True
     except Exception:
@@ -26,23 +25,28 @@ except Exception:
     TESSERACT_AVAILABLE = False
     TESSERACT_BINARY_OK = False
 
+# Geopy (Google geocoding)
+try:
+    from geopy.geocoders import GoogleV3
+    GEOPY_AVAILABLE = True
+except Exception:
+    GEOPY_AVAILABLE = False
+
 # ----------------- KONFIGURATION -----------------
 HOME_ADDRESS_DEFAULT = "Rudolf-Diesel-Straße 2, 35463 Fernwald, Germany"
-# -------------------------------------------------
-
-st.set_page_config(page_title="NN-Sortierer (Streamlit)", layout="centered")
-st.title("Nearest-Neighbor Sortierer — Adressen (Text-only)")
+st.set_page_config(page_title="NN-Sortierer (Streamlit) mit Kamera-OCR", layout="centered")
+st.title("Nearest-Neighbor Sortierer — Adressen (mit Kamera-OCR)")
 
 # ----------------- Hilfsfunktionen -----------------
+def get_google_api_key():
+    if hasattr(st, "secrets") and "GOOGLE_API_KEY" in st.secrets:
+        return st.secrets["GOOGLE_API_KEY"]
+    return os.environ.get("GOOGLE_API_KEY")
 
-def parse_addresses_from_file(f) -> List[str]:
-    content = f.read().decode("utf-8")
-    return [line.strip() for line in content.splitlines() if line.strip()]
-
+GOOGLE_API_KEY = get_google_api_key()
 
 def parse_addresses_from_text(t: str) -> List[str]:
     return [line.strip() for line in t.splitlines() if line.strip()]
-
 
 def parse_latlon_line(line: str):
     parts = [p.strip() for p in line.split(",")]
@@ -56,7 +60,6 @@ def parse_latlon_line(line: str):
             return None
     return None
 
-
 def haversine_km(a: Tuple[float,float], b: Tuple[float,float]) -> float:
     R = 6371.0
     lat1, lon1 = map(radians, a)
@@ -66,7 +69,6 @@ def haversine_km(a: Tuple[float,float], b: Tuple[float,float]) -> float:
     hav = sin(dlat/2)**2 + cos(lat1)*cos(lat2)*sin(dlon/2)**2
     c = 2 * atan2(sqrt(hav), sqrt(1-hav))
     return R * c
-
 
 def nearest_neighbor_sort_by_coords(coords_map: dict, start_coord: Tuple[float,float]) -> List[str]:
     unvisited = set(coords_map.keys())
@@ -79,10 +81,8 @@ def nearest_neighbor_sort_by_coords(coords_map: dict, start_coord: Tuple[float,f
         current_coord = coords_map[nearest]
     return route
 
-
 def generate_txt(data_list: List[str]) -> bytes:
     return "\n".join(data_list).encode("utf-8")
-
 
 def generate_csv_bytes(data_list: List[str]) -> bytes:
     buf = io.StringIO()
@@ -91,40 +91,13 @@ def generate_csv_bytes(data_list: List[str]) -> bytes:
         writer.writerow([r])
     return buf.getvalue().encode("utf-8")
 
-# ----------------- Google API Key aus Secrets -----------------
-
-def get_google_api_key():
-    if hasattr(st, "secrets") and "GOOGLE_API_KEY" in st.secrets:
-        return st.secrets["GOOGLE_API_KEY"]
-    return os.environ.get("GOOGLE_API_KEY")
-
-GOOGLE_API_KEY = get_google_api_key()
-if not GOOGLE_API_KEY:
-    st.error("Kein Google API Key gefunden. Bitte als Streamlit Secret oder Environment Variable setzen.")
-    st.stop()
-
-# ----------------- Geocoding-Funktion -----------------
-
-def geocode_address_google(address: str):
-    g = GoogleV3(api_key=GOOGLE_API_KEY, timeout=10)
-    loc = g.geocode(address)
-    if loc is None:
-        raise ValueError(f"Adresse nicht gefunden: {address}")
-    return (loc.latitude, loc.longitude)
-
-# ----------------- OCR Hilfsfunktionen -----------------
-
+# ----------------- Google Vision OCR (server-side) -----------------
 def ocr_image_with_google_vision(image_bytes: bytes, api_key: str) -> str:
-    """Sendet ein Bild an Google Vision API (TEXT_DETECTION) und gibt den erkannten Text zurück.
-    Erwartet die Rohbytes des Bildes sowie einen gültigen API-Key (Serverseitig, z.B. st.secrets oder ENV).
-    """
-    import base64
-    import requests
-
+    """Sendet Bildbytes an Google Vision TEXT_DETECTION und gibt erkannten Text zurück."""
     if not api_key:
-        raise RuntimeError("Kein GOOGLE_API_KEY gesetzt.")
-    b64 = base64.b64encode(image_bytes).decode('utf-8')
+        raise RuntimeError("Kein GOOGLE_API_KEY gesetzt für Vision OCR.")
     url = f"https://vision.googleapis.com/v1/images:annotate?key={api_key}"
+    b64 = base64.b64encode(image_bytes).decode("utf-8")
     payload = {
         "requests": [
             {
@@ -140,18 +113,14 @@ def ocr_image_with_google_vision(image_bytes: bytes, api_key: str) -> str:
     try:
         annotations = data["responses"][0].get("textAnnotations", [])
         if annotations:
-            return annotations[0].get("description", "")
+            return annotations[0].get("description", "")  # gesamter erkannter Text
         return ""
     except Exception:
         return ""
 
-
 def ocr_image_to_text(image_bytes_io: io.BytesIO) -> str:
-    """Versucht zunächst, pytesseract zu verwenden (falls lokal installiert).
-    Falls pytesseract nicht verfügbar ist, fällt diese Funktion auf
-    Google Vision API zurück (benötigt st.secrets['GOOGLE_API_KEY'] oder ENV).
-    """
-    # 1) lokales Tesseract wenn möglich
+    """Versucht lokal pytesseract, sonst Google Vision (benötigt GOOGLE_API_KEY)."""
+    # lokales tesseract (wenn vorhanden)
     if TESSERACT_AVAILABLE and TESSERACT_BINARY_OK:
         img = Image.open(image_bytes_io)
         img = ImageOps.exif_transpose(img).convert("L")
@@ -159,145 +128,153 @@ def ocr_image_to_text(image_bytes_io: io.BytesIO) -> str:
             img = img.resize((int(img.size[0]*2), int(img.size[1]*2)), Image.LANCZOS)
         return pytesseract.image_to_string(img, lang='deu+eng')
 
-    # 2) fallback auf Google Vision API
-    api_key = None
-    if hasattr(st, "secrets"):
-        api_key = st.secrets.get("GOOGLE_API_KEY")
-    if not api_key:
-        api_key = os.environ.get("GOOGLE_API_KEY")
+    # fallback: Google Vision
+    if GOOGLE_API_KEY:
+        return ocr_image_with_google_vision(image_bytes_io.getvalue(), GOOGLE_API_KEY)
 
-    if api_key:
-        return ocr_image_with_google_vision(image_bytes_io.getvalue(), api_key)
+    raise RuntimeError("Weder lokales Tesseract noch GOOGLE_API_KEY für Vision verfügbar.")
 
-    raise RuntimeError("Weder pytesseract noch GOOGLE_API_KEY verfügbar. Bitte Tesseract installieren oder GOOGLE_API_KEY setzen.")
-
+# ----------------- Heuristische Extraktion einer Adresse aus OCR-Text -----------------
 def extract_address_from_text(text: str) -> str:
-    """Heuristische Extraktion einer Adresse aus OCR-Text.
-    Gibt die gefundene Adresse als einzelne Zeile zurück oder None.
-    Diese Funktion ist intentionally konservativ; du kannst sie an dein Datenformat anpassen.
-    """
     if not text:
         return None
-    # 1) Suche nach PLZ + Ortsname (z.B. "35463 Fernwald")
-    m = re.search(r"(\d{5}\s+[A-Za-zÄÖÜäöüß\-\. ]{2,})", text)
+    # Normalize newlines
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    joined = "\n".join(lines)
+    # 1) Suche PLZ + Ort (z.B. 12345 Musterstadt)
+    m = re.search(r"(\d{5}\s+[A-Za-zÄÖÜäöüß\\-\\. ]{2,})", joined)
     if m:
-        # versuche vorhergehende Zeile als Straße+Hausnummer hinzuzufügen
-        lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
-        # finde Index der Zeile die die PLZ enthält
+        # finde Zeile mit PLZ, nehme vorherige Zeile als Straße (falls vorhanden)
         for i, ln in enumerate(lines):
             if m.group(1) in ln:
                 street = lines[i-1] if i-1 >= 0 else None
-                if street and re.search(r"\d", street):
+                if street and re.search(r"\d", street):  # enthält Hausnummer
                     return f"{street}, {lines[i]}"
                 return lines[i]
-    # 2) Falls keine PLZ gefunden: suche nach Muster Straße + Hausnummer
-    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    # 2) Suche Zeile mit Straße + Hausnummer Muster
     for ln in lines:
-        if re.search(r"\d", ln) and len(ln) > 6:
-            # einfache Annahme: enthält Ziffer => evtl. Straße+Nr
+        if re.search(r"\b\S+\s+\d+[a-zA-Z]?\b", ln):  # einfache Straße + Nr Erkennung
             return ln
-    # 3) fallback: erste nicht-leere Zeile (sehr konservativ)
+    # 3) fallback: erste Zeile
     return lines[0] if lines else None
 
-# ----------------- UI: Home-Adresse + Adresseneingabe + Kamera-Scanner -----------------
+# ----------------- Google Geocoding (geopy) -----------------
+def geocode_address_google(address: str):
+    if not GOOGLE_API_KEY:
+        raise RuntimeError("GOOGLE_API_KEY nicht gesetzt für Geocoding.")
+    if not GEOPY_AVAILABLE:
+        raise RuntimeError("geopy nicht installiert. pip install geopy")
+    g = GoogleV3(api_key=GOOGLE_API_KEY, timeout=10)
+    loc = g.geocode(address)
+    if loc is None:
+        raise ValueError(f"Adresse nicht gefunden: {address}")
+    return (loc.latitude, loc.longitude)
 
-home_addr = st.text_input("Home-Adresse (Startpunkt)", value=HOME_ADDRESS_DEFAULT)
-
-# Datei hochladen und Textfeld automatisch befüllen
-uploaded_file = st.file_uploader("adressen.txt / adressen.csv hochladen (optional)", type=["txt","csv"])
-prefill_text = ""
-if uploaded_file is not None:
-    try:
-        file_addresses = parse_addresses_from_file(uploaded_file)
-        prefill_text = "\n".join(file_addresses)
-    except Exception as e:
-        st.error(f"Fehler beim Lesen der Datei: {e}")
-
-# Session-state initialisieren für Scanner
+# ----------------- SESSION STATE Initialisierung -----------------
 if 'scanning' not in st.session_state:
     st.session_state['scanning'] = False
+if 'scan_idx' not in st.session_state:
+    st.session_state['scan_idx'] = 0
 if 'camera_last_hash' not in st.session_state:
     st.session_state['camera_last_hash'] = None
 if 'scanned_text' not in st.session_state:
-    st.session_state['scanned_text'] = prefill_text
+    st.session_state['scanned_text'] = ""
 
-# Scanner-Steuerung
-col_scan1, col_scan2, col_scan3 = st.columns([1,1,2])
-with col_scan1:
+# ----------------- UI: Home-Adresse / Datei / Kamera-Steuerung -----------------
+home_addr = st.text_input("Home-Adresse (Startpunkt)", value=HOME_ADDRESS_DEFAULT)
+
+uploaded_file = st.file_uploader("adressen.txt / adressen.csv hochladen (optional)", type=["txt","csv"])
+if uploaded_file is not None:
+    try:
+        content = uploaded_file.read().decode("utf-8")
+        st.session_state['scanned_text'] = "\n".join([line.strip() for line in content.splitlines() if line.strip()])
+    except Exception as e:
+        st.error(f"Fehler beim Lesen der Datei: {e}")
+
+col1, col2, col3 = st.columns([1,1,2])
+with col1:
     if st.button("Start Kamera-Scan"):
         st.session_state['scanning'] = True
-with col_scan2:
+with col2:
     if st.button("Stop Kamera-Scan"):
         st.session_state['scanning'] = False
-with col_scan3:
-    st.checkbox("Automatisch erkannte Adresse sofort einfügen", value=True, key='auto_add_addr')
+with col3:
+    auto_add = st.checkbox("Automatisch erkannte Adresse sofort einfügen", value=True)
 
-# Falls pytesseract/Tesseract nicht verfügbar: Hinweis
-if not (TESSERACT_AVAILABLE and TESSERACT_BINARY_OK):
-    st.warning("OCR (pytesseract/Tesseract) ist nicht vollständig verfügbar. Kamera-Scan ist deaktiviert.\n" 
-               "Installationshinweise: pip install pillow pytesseract und auf Debian/Ubuntu: sudo apt-get install tesseract-ocr tesseract-ocr-deu")
+# Prüfe ob OCR möglich ist (lokal oder via Vision key)
+ocr_possible = (TESSERACT_AVAILABLE and TESSERACT_BINARY_OK) or bool(GOOGLE_API_KEY)
+if not ocr_possible:
+    st.warning(
+        "Weder lokales Tesseract noch GOOGLE_API_KEY verfügbar. Kamera-Scan deaktiviert.\n"
+        "Setze GOOGLE_API_KEY als Streamlit Secret oder Environment-Variable oder installiere Tesseract auf dem Host."
+    )
 
-# Kamera-Scanning UI (bleibt sichtbar, solange 'scanning' True ist)
+# Kamera-Input (wird neu gerendert, wenn scan_idx erhöht wird)
 if st.session_state['scanning']:
-    st.markdown("**Kamera aktiv — nimm ein Foto einer Adresse auf. Nach der Erkennung bleibt die Kamera aktiv, du kannst mehrere Adressen nacheinander scannen.**")
-    if TESSERACT_AVAILABLE and TESSERACT_BINARY_OK:
-        img_file = st.camera_input("Kamera: Adresse aufnehmen")
+    if not ocr_possible:
+        st.info("Kamera-Scan ist deaktiviert, weil keine OCR-Möglichkeit gefunden wurde.")
+    else:
+        st.markdown("**Kamera aktiv — mache ein Foto einer Adresse. Nach der Erkennung bleibt die Kamera zur weiteren Nutzung bereit.**")
+        cam_key = f"cam_{st.session_state['scan_idx']}"
+        img_file = st.camera_input("Foto aufnehmen", key=cam_key)
         if img_file is not None:
             img_bytes = img_file.getvalue()
+            # Hash prüfen um Doppelverarbeitung zu vermeiden
             h = hashlib.sha256(img_bytes).hexdigest()
-            if h != st.session_state['camera_last_hash']:
+            if h == st.session_state.get('camera_last_hash'):
+                st.info("Dieses Foto wurde bereits verarbeitet. Bitte neues Foto aufnehmen.")
+            else:
                 st.session_state['camera_last_hash'] = h
-                try:
-                    text = ocr_image_to_text(io.BytesIO(img_bytes))
-                    addr = extract_address_from_text(text)
-                    if addr:
-                        if st.session_state.get('auto_add_addr', True):
-                            # füge zur internen Scanned-Text-Liste hinzu
-                            existing = st.session_state.get('scanned_text', '').strip()
-                            if existing:
-                                st.session_state['scanned_text'] = existing + '\n' + addr
-                            else:
-                                st.session_state['scanned_text'] = addr
-                            st.success(f"Adresse erkannt und hinzugefügt: {addr}")
-                        else:
-                            st.info(f"Adresse erkannt: {addr}")
-                            if st.button("Erkannte Adresse einfügen"):
+                with st.spinner("OCR wird ausgeführt..."):
+                    try:
+                        text = ocr_image_to_text(io.BytesIO(img_bytes))
+                        addr = extract_address_from_text(text)
+                        if addr:
+                            if auto_add:
                                 existing = st.session_state.get('scanned_text', '').strip()
                                 if existing:
-                                    st.session_state['scanned_text'] = existing + '\n' + addr
+                                    st.session_state['scanned_text'] = existing + "\n" + addr
                                 else:
                                     st.session_state['scanned_text'] = addr
-                                st.success("Adresse eingefügt.")
-                    else:
-                        st.warning("Keine Adresse im Bild erkannt. Rohtext (zur Prüfung):")
-                        st.text_area("OCR Rohtext", value=text, height=150)
-                except Exception as e:
-                    st.error(f"OCR fehlgeschlagen: {e}")
-            else:
-                st.info("Dasselbe Bild wurde bereits verarbeitet — bitte ein neues Foto aufnehmen.")
-    else:
-        st.info("OCR-Bibliothek nicht verfügbar — siehe Installationshinweis oben.")
+                                st.success(f"Adresse erkannt und hinzugefügt: {addr}")
+                            else:
+                                st.info(f"Erkannte Adresse: {addr}")
+                                if st.button("Erkannte Adresse einfügen"):
+                                    existing = st.session_state.get('scanned_text', '').strip()
+                                    if existing:
+                                        st.session_state['scanned_text'] = existing + "\n" + addr
+                                    else:
+                                        st.session_state['scanned_text'] = addr
+                                    st.success("Adresse eingefügt.")
+                        else:
+                            st.warning("Keine Adresse im Bild erkannt. Rohtext (zur Prüfung):")
+                            st.text_area("OCR Rohtext", value=text, height=150)
+                    except Exception as e:
+                        st.error(f"OCR fehlgeschlagen: {e}")
+                # erhöht scan_idx damit ein neues camera_input-Widget gerendert wird und Nutzer sofort weiterscannen kann
+                st.session_state['scan_idx'] += 1
 
-# Das Haupt-Textfeld für Adressen: wird mit gescannten Adressen vorbefüllt (falls vorhanden) oder mit Datei-Inhalt
-initial_text = st.session_state.get('scanned_text', '') if st.session_state.get('scanned_text') else prefill_text
+# Haupt Adress-Textfeld (vorbefüllt durch Scans oder Datei)
+initial_text = st.session_state.get('scanned_text', '')
 text_input = st.text_area("Adressen (eine pro Zeile)", height=200, value=initial_text, placeholder="Adresse 1\nAdresse 2\n...")
 priority_input = st.text_area("Priorisierte Adressen (optional, werden zuerst besucht)", height=100, placeholder="Adresse A\nAdresse B\n...")
 
 submit = st.button("Sortieren")
-
 if not submit:
     st.info("Gib Adressen ein (oder scanne sie per Kamera) und klicke auf 'Sortieren', um die Reihenfolge zu berechnen.")
     st.stop()
 
-# ----------------- Adressen sammeln -----------------
+# ----------------- Adressen sammeln und Geokodieren -----------------
 addresses = parse_addresses_from_text(text_input)
 if not addresses:
     st.warning("Keine Adressen eingegeben.")
     st.stop()
 
-# ----------------- Geokodierung -----------------
 coords_map = {}
 geocode_errors = []
+if not GEOPY_AVAILABLE:
+    st.error("geopy nicht installiert. Installiere mit: pip install geopy")
+    st.stop()
 
 with st.spinner("Geokodieren..."):
     for line in addresses:
@@ -331,21 +308,17 @@ with st.spinner("Geokodieren..."):
         except Exception as e:
             st.warning(f"Priorisierte Adresse konnte nicht geokodiert werden und wird ignoriert: {addr} → {e}")
 
-    # Restliche Adressen ohne Duplikate der Prioritäten
     remaining_coords_map = {a: coords_map[a] for a in coords_map if a not in [p[0] for p in priority_coords]}
 
-    # NN-Sortierung startet vom letzten priorisierten Punkt oder Home, falls keine Priorität
     if priority_coords:
         start_coord_nn = priority_coords[-1][1]
     else:
         start_coord_nn = home_coord
 
     sorted_remaining = nearest_neighbor_sort_by_coords(remaining_coords_map, start_coord_nn)
-
-    # Endgültige Route = Priorisierte Adressen + restliche Adressen (Home wird nicht in der Liste gezeigt)
     final_route = [p[0] for p in priority_coords] + sorted_remaining
 
-# ----------------- Ergebnisanzeige + Download -----------------
+# ----------------- Ergebnisse -----------------
 st.subheader("Sortierte Adressen")
 st.text_area("Ergebnis (eine Adresse pro Zeile)", value="\n".join(final_route), height=250)
 
