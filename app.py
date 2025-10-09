@@ -237,46 +237,116 @@ if not (TESSERACT_AVAILABLE and TESSERACT_BINARY_OK):
     st.warning("OCR (pytesseract/Tesseract) ist nicht vollständig verfügbar. Kamera-Scan ist deaktiviert.\n" 
                "Installationshinweise: pip install pillow pytesseract und auf Debian/Ubuntu: sudo apt-get install tesseract-ocr tesseract-ocr-deu")
 
-# Kamera-Scanning UI (bleibt sichtbar, solange 'scanning' True ist)
+# Kamera-Scanning UI — wir benutzen eine HTML-Komponente, die die Rückkamera bevorzugt
+# und ein einzelnes Foto als Data-URL an die Streamlit-App zurückgibt. Der Nutzer kann
+# nacheinander Fotos aufnehmen (die Kamera bleibt in der Komponente aktiv).
 if st.session_state['scanning']:
-    st.markdown("**Kamera aktiv — nimm ein Foto einer Adresse auf. Nach der Erkennung bleibt die Kamera aktiv, du kannst mehrere Adressen nacheinander scannen.**")
-    if TESSERACT_AVAILABLE and TESSERACT_BINARY_OK:
-        img_file = st.camera_input("Kamera: Adresse aufnehmen")
-        if img_file is not None:
-            img_bytes = img_file.getvalue()
-            h = hashlib.sha256(img_bytes).hexdigest()
-            if h != st.session_state['camera_last_hash']:
-                st.session_state['camera_last_hash'] = h
-                try:
-                    text = ocr_image_to_text(io.BytesIO(img_bytes))
-                    addr = extract_address_from_text(text)
-                    if addr:
-                        if st.session_state.get('auto_add_addr', True):
-                            # füge zur internen Scanned-Text-Liste hinzu
-                            existing = st.session_state.get('scanned_text', '').strip()
-                            if existing:
-                                st.session_state['scanned_text'] = existing + '\n' + addr
-                            else:
-                                st.session_state['scanned_text'] = addr
-                            st.success(f"Adresse erkannt und hinzugefügt: {addr}")
-                        else:
-                            st.info(f"Adresse erkannt: {addr}")
-                            if st.button("Erkannte Adresse einfügen"):
-                                existing = st.session_state.get('scanned_text', '').strip()
-                                if existing:
-                                    st.session_state['scanned_text'] = existing + '\n' + addr
-                                else:
-                                    st.session_state['scanned_text'] = addr
-                                st.success("Adresse eingefügt.")
-                    else:
-                        st.warning("Keine Adresse im Bild erkannt. Rohtext (zur Prüfung):")
-                        st.text_area("OCR Rohtext", value=text, height=150)
-                except Exception as e:
-                    st.error(f"OCR fehlgeschlagen: {e}")
+    st.markdown("**Kamera aktiv — nimm ein Foto einer Adresse auf. Nach der Erkennung kannst du weitere Fotos aufnehmen.**")
+    # HTML-Komponente: zeigt Video (facingMode: environment), Capture-Button, sendet DataURL per postMessage
+    camera_html = '''
+    <div>
+      <video id="video" autoplay playsinline style="width:100%;max-width:560px;border:1px solid #ddd"></video>
+      <div style="margin-top:8px;">
+        <button id="capture">Foto aufnehmen</button>
+        <button id="stop">Stopp</button>
+        <span id="status" style="margin-left:8px"></span>
+      </div>
+      <canvas id="canvas" style="display:none"></canvas>
+    </div>
+    <script>
+    (async function(){
+      const video = document.getElementById('video');
+      const canvas = document.getElementById('canvas');
+      const status = document.getElementById('status');
+      let stream = null;
+      const constraints = { video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false };
+      try {
+        stream = await navigator.mediaDevices.getUserMedia(constraints);
+        video.srcObject = stream;
+        await video.play();
+        status.textContent = 'Kamera bereit';
+      } catch (e) {
+        // fallback to any camera
+        try {
+          stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+          video.srcObject = stream;
+          await video.play();
+          status.textContent = 'Kamera (Fallback) bereit';
+        } catch (err) {
+          status.textContent = 'Kamera nicht verfügbar: ' + err.message;
+          return;
+        }
+      }
+
+      document.getElementById('capture').addEventListener('click', async () => {
+        const w = video.videoWidth;
+        const h = video.videoHeight;
+        if (!w || !h) { status.textContent = 'Kein Videoframe'; return; }
+        // crop mittleren Bereich (vermeidet weitwinkel-Randbereiche)
+        const cropW = Math.floor(w * 0.8);
+        const cropH = Math.floor(h * 0.5);
+        const sx = Math.floor((w - cropW) / 2);
+        const sy = Math.floor((h - cropH) / 2);
+        canvas.width = cropW;
+        canvas.height = cropH;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(video, sx, sy, cropW, cropH, 0, 0, cropW, cropH);
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.9);
+        // send to Streamlit
+        const message = { isStreamlitMessage: true, type: 'streamlit:setComponentValue', value: dataUrl };
+        window.parent.postMessage(message, '*');
+        status.textContent = 'Foto gesendet';
+      });
+
+      document.getElementById('stop').addEventListener('click', () => {
+        if (stream) { stream.getTracks().forEach(t => t.stop()); }
+        status.textContent = 'Gestoppt';
+      });
+    })();
+    </script>
+    '''
+
+    import streamlit.components.v1 as components
+    component_value = components.html(camera_html, height=480)
+
+    # component_value ist eine Data-URL (string) wenn ein Foto aufgenommen wurde
+    if component_value:
+        try:
+            # component_value kann wie 'data:image/jpeg;base64,/9j/4AAQ...'
+            if isinstance(component_value, dict):
+                # safety: extract typical fields
+                s = component_value.get('value') or component_value.get('data') or component_value.get('value')
             else:
-                st.info("Dasselbe Bild wurde bereits verarbeitet — bitte ein neues Foto aufnehmen.")
-    else:
-        st.info("OCR-Bibliothek nicht verfügbar — siehe Installationshinweis oben.")
+                s = str(component_value)
+            if s and s.startswith('data:'):
+                header, b64 = s.split(',', 1)
+                import base64
+                img_bytes = base64.b64decode(b64)
+                h = hashlib.sha256(img_bytes).hexdigest()
+                if h != st.session_state.get('camera_last_hash'):
+                    st.session_state['camera_last_hash'] = h
+                    with st.spinner('OCR via Google Vision...'):
+                        try:
+                            text = ocr_image_with_google_vision(img_bytes, GOOGLE_API_KEY)
+                            addr = extract_address_from_text(text)
+                            if addr:
+                                if st.session_state.get('auto_add_addr', True):
+                                    existing = st.session_state.get('scanned_text', '').strip()
+                                    if existing:
+                                        st.session_state['scanned_text'] = existing + '\n' + addr
+                                    else:
+                                        st.session_state['scanned_text'] = addr
+                                    st.success(f"Adresse erkannt und hinzugefügt: {addr}")
+                                else:
+                                    st.info(f"Erkannte Adresse: {addr}")
+                            else:
+                                st.warning('Keine Adresse im Bild erkannt. Rohtext:\n' + (text or ''))
+                        except Exception as e:
+                            st.error(f'OCR/Google Vision Fehler: {e}')
+                else:
+                    st.info('Dieses Foto wurde bereits verarbeitet.')
+        except Exception as e:
+            st.error(f'Fehler bei der Verarbeitung des Kamerabildes: {e}')
 
 # Das Haupt-Textfeld für Adressen: wird mit gescannten Adressen vorbefüllt (falls vorhanden) oder mit Datei-Inhalt
 initial_text = st.session_state.get('scanned_text', '') if st.session_state.get('scanned_text') else prefill_text
