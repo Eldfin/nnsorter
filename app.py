@@ -201,7 +201,9 @@ if st.session_state['scanning']:
     })();
     </script>
     """
-    components.html(camera_html, height=400, scrolling=False, key="camera_block")
+    
+    # Nur height und key setzen, kein scrolling=False
+    components.html(camera_html, height=420, key="camera_block")
 
 # ----------------- Bild verarbeiten -----------------
 if st.session_state['camera_image']:
