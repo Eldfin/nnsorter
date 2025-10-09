@@ -156,9 +156,11 @@ if st.session_state['scanning'] and ocr_possible:
     st.markdown("**Kamera aktiv — Foto aufnehmen. Nach der Erkennung bleibt die Kamera bereit.**")
     camera_html = '''
     <div style="max-width:480px; margin:auto; text-align:center;">
-        <video id="video" autoplay playsinline style="width:100%; border:1px solid #ddd;"></video>
+        <div style="overflow:hidden; max-height:320px; border:1px solid #ddd;">
+            <video id="video" autoplay playsinline style="width:100%;"></video>
+        </div>
         <div style="margin-top:8px;">
-            <button id="capture">Foto aufnehmen</button>
+            <button id="capture" style="width:150px; height:40px; font-size:16px;">Foto aufnehmen</button>
             <span id="status" style="margin-left:8px;"></span>
         </div>
         <canvas id="canvas" style="display:none;"></canvas>
@@ -168,9 +170,8 @@ if st.session_state['scanning'] and ocr_possible:
         const video = document.getElementById('video');
         const canvas = document.getElementById('canvas');
         const status = document.getElementById('status');
-        let stream = null;
         try {
-            stream = await navigator.mediaDevices.getUserMedia({
+            const stream = await navigator.mediaDevices.getUserMedia({
                 video:{facingMode:{ideal:'environment'}, width:{ideal:1280}, height:{ideal:720}},
                 audio:false
             });
@@ -183,13 +184,11 @@ if st.session_state['scanning'] and ocr_possible:
             if(capabilities.zoom){
                 track.applyConstraints({ advanced: [{ zoom: capabilities.zoom.max }] });
             }
-    
             status.textContent='Kamera bereit';
         } catch(e){status.textContent='Kamera nicht verfügbar: '+e; return;}
     
         document.getElementById('capture').addEventListener('click', ()=>{
             const w = video.videoWidth, h = video.videoHeight;
-            // Mittlerer Bereich crop: 80% Breite, 50% Höhe
             const cropW = Math.floor(w*0.8), cropH = Math.floor(h*0.5);
             const sx = Math.floor((w-cropW)/2), sy = Math.floor((h-cropH)/2);
             canvas.width = cropW; canvas.height = cropH;
@@ -202,7 +201,7 @@ if st.session_state['scanning'] and ocr_possible:
     })();
     </script>
     '''
-    img_dataurl = components.html(camera_html, height=320)
+    img_dataurl = components.html(camera_html, height=400)
 
     if img_dataurl:
         try:
