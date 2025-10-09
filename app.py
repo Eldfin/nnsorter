@@ -122,7 +122,7 @@ def ocr_image_with_google_vision(image_bytes: bytes, api_key: str) -> str:
     import requests
 
     if not api_key:
-        raise RuntimeError("Kein GOOGLE_VISION_API_KEY gesetzt.")
+        raise RuntimeError("Kein GOOGLE_API_KEY gesetzt.")
     b64 = base64.b64encode(image_bytes).decode('utf-8')
     url = f"https://vision.googleapis.com/v1/images:annotate?key={api_key}"
     payload = {
@@ -149,7 +149,7 @@ def ocr_image_with_google_vision(image_bytes: bytes, api_key: str) -> str:
 def ocr_image_to_text(image_bytes_io: io.BytesIO) -> str:
     """Versucht zunächst, pytesseract zu verwenden (falls lokal installiert).
     Falls pytesseract nicht verfügbar ist, fällt diese Funktion auf
-    Google Vision API zurück (benötigt st.secrets['GOOGLE_VISION_API_KEY'] oder ENV).
+    Google Vision API zurück (benötigt st.secrets['GOOGLE_API_KEY'] oder ENV).
     """
     # 1) lokales Tesseract wenn möglich
     if TESSERACT_AVAILABLE and TESSERACT_BINARY_OK:
@@ -162,14 +162,14 @@ def ocr_image_to_text(image_bytes_io: io.BytesIO) -> str:
     # 2) fallback auf Google Vision API
     api_key = None
     if hasattr(st, "secrets"):
-        api_key = st.secrets.get("GOOGLE_VISION_API_KEY")
+        api_key = st.secrets.get("GOOGLE_API_KEY")
     if not api_key:
-        api_key = os.environ.get("GOOGLE_VISION_API_KEY")
+        api_key = os.environ.get("GOOGLE_API_KEY")
 
     if api_key:
         return ocr_image_with_google_vision(image_bytes_io.getvalue(), api_key)
 
-    raise RuntimeError("Weder pytesseract noch GOOGLE_VISION_API_KEY verfügbar. Bitte Tesseract installieren oder GOOGLE_VISION_API_KEY setzen.")
+    raise RuntimeError("Weder pytesseract noch GOOGLE_API_KEY verfügbar. Bitte Tesseract installieren oder GOOGLE_API_KEY setzen.")
 
 def extract_address_from_text(text: str) -> str:
     """Heuristische Extraktion einer Adresse aus OCR-Text.
