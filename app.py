@@ -178,7 +178,6 @@ if st.session_state['scanning'] and ocr_possible:
             video.srcObject = stream;
             await video.play();
     
-            // Zoom auf Maximum, falls unterstützt
             const [track] = stream.getVideoTracks();
             const capabilities = track.getCapabilities();
             if(capabilities.zoom){
@@ -195,13 +194,21 @@ if st.session_state['scanning'] and ocr_possible:
             const ctx = canvas.getContext('2d');
             ctx.drawImage(video,sx,sy,cropW,cropH,0,0,cropW,cropH);
             const dataUrl = canvas.toDataURL('image/jpeg',0.9);
-            window.parent.postMessage({isStreamlitMessage:true,type:'streamlit:setComponentValue',value:dataUrl}, '*');
+    
+            // Post Message an Streamlit
+            const message = {
+                isStreamlitMessage: true,
+                type: 'streamlit:setComponentValue',
+                value: dataUrl
+            };
+            window.parent.postMessage(message, '*');
             status.textContent='Foto gesendet';
         });
     })();
     </script>
     '''
-    img_dataurl = components.html(camera_html, height=400)
+    
+    img_dataurl = components.html(camera_html, height=400, key="camera_block")
 
     if img_dataurl:
         try:
