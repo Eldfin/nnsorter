@@ -153,38 +153,48 @@ if not ocr_possible:
     st.warning("GOOGLE_API_KEY nicht gefunden. Kamera-Scan deaktiviert.")
 
 if st.session_state['scanning'] and ocr_possible:
-    st.markdown("**Kamera aktiv — Foto aufnehmen. Nach der Erkennung bleibt Kamera bereit.**")
+    st.markdown("**Kamera aktiv — Foto aufnehmen. Nach der Erkennung bleibt die Kamera bereit.**")
     camera_html = '''
-    <div>
-    <video id="video" autoplay playsinline style="width:100%; max-width:560px; border:1px solid #ddd"></video>
-    <div style="margin-top:8px;"><button id="capture">Foto aufnehmen</button><span id="status" style="margin-left:8px;"></span></div>
-    <canvas id="canvas" style="display:none"></canvas>
+    <div style="position:relative; max-width:360px; margin:auto;">
+        <video id="video" autoplay playsinline style="width:100%; border:1px solid #ddd;"></video>
+        <div style="text-align:center; margin-top:8px;">
+            <button id="capture">Foto aufnehmen</button>
+            <span id="status" style="margin-left:8px;"></span>
+        </div>
+        <canvas id="canvas" style="display:none;"></canvas>
     </div>
     <script>
     (async function(){
-      const video = document.getElementById('video');
-      const canvas = document.getElementById('canvas');
-      const status = document.getElementById('status');
-      let stream = null;
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}, width:{ideal:1280}, height:{ideal:720}}, audio:false});
-        video.srcObject = stream; await video.play();
-        status.textContent='Kamera bereit';
-      } catch(e){status.textContent='Kamera nicht verfügbar: '+e; return;}
-      document.getElementById('capture').addEventListener('click',()=>{
-        const w=video.videoWidth, h=video.videoHeight;
-        const cropW=Math.floor(w*0.8), cropH=Math.floor(h*0.5);
-        const sx=Math.floor((w-cropW)/2), sy=Math.floor((h-cropH)/2);
-        canvas.width=cropW; canvas.height=cropH;
-        const ctx=canvas.getContext('2d'); ctx.drawImage(video,sx,sy,cropW,cropH,0,0,cropW,cropH);
-        const dataUrl=canvas.toDataURL('image/jpeg',0.9);
-        window.parent.postMessage({isStreamlitMessage:true,type:'streamlit:setComponentValue',value:dataUrl},'*');
-        status.textContent='Foto gesendet';
-      });
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const status = document.getElementById('status');
+        let stream = null;
+        try {
+            // Rückkamera, moderate Auflösung
+            stream = await navigator.mediaDevices.getUserMedia({
+                video:{facingMode:{ideal:'environment'}, width:{ideal:640}, height:{ideal:480}}, 
+                audio:false
+            });
+            video.srcObject = stream; await video.play();
+            status.textContent='Kamera bereit';
+        } catch(e){status.textContent='Kamera nicht verfügbar: '+e; return;}
+        
+        document.getElementById('capture').addEventListener('click', ()=>{
+            const w = video.videoWidth, h = video.videoHeight;
+            // Crop: mittlerer Bereich, 80% Breite, 50% Höhe
+            const cropW = Math.floor(w*0.8), cropH = Math.floor(h*0.5);
+            const sx = Math.floor((w-cropW)/2), sy = Math.floor((h-cropH)/2);
+            canvas.width = cropW; canvas.height = cropH;
+            const ctx = canvas.getContext('2d');
+            ctx.drawImage(video, sx, sy, cropW, cropH, 0, 0, cropW, cropH);
+            const dataUrl = canvas.toDataURL('image/jpeg',0.9);
+            window.parent.postMessage({isStreamlitMessage:true, type:'streamlit:setComponentValue', value:dataUrl}, '*');
+            status.textContent='Foto gesendet';
+        });
     })();
     </script>
     '''
-    img_dataurl = components.html(camera_html, height=480)
+    img_dataurl = components.html(camera_html, height=320)
 
     if img_dataurl:
         try:
