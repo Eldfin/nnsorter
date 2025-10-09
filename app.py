@@ -114,25 +114,64 @@ def geocode_address_google(address: str):
 
 # ----------------- OCR Hilfsfunktionen -----------------
 
-def ocr_image_to_text(image_bytes: io.BytesIO) -> str:
-    """Verarbeitet Bytes der Kameraaufnahme und gibt erkannten Text zurück.
-    Benutzt PIL + pytesseract, falls verfügbar.
+def ocr_image_with_google_vision(image_bytes: bytes, api_key: str) -> str:
+    """Sendet ein Bild an Google Vision API (TEXT_DETECTION) und gibt den erkannten Text zurück.
+    Erwartet die Rohbytes des Bildes sowie einen gültigen API-Key (Serverseitig, z.B. st.secrets oder ENV).
     """
-    if not (TESSERACT_AVAILABLE and TESSERACT_BINARY_OK):
-        raise RuntimeError("pytesseract oder Tesseract-Binary nicht verfügbar")
-    img = Image.open(image_bytes)
-    img = ImageOps.exif_transpose(img)
-    # Graustufen + moderate Vergrößerung kann OCR-Ergebnisse oft verbessern
-    img = img.convert("L")
-    w, h = img.size
-    if max(w, h) < 1200:
-        img = img.resize((int(w*2), int(h*2)), Image.LANCZOS)
-    # Du kannst hier zusätzliche Bildvorverarbeitung ergänzen (Kontrast, Schwellwert, etc.)
-    text = pytesseract.image_to_string(img, lang='deu+eng')
-    return text
+    import base64
+    import requests
+
+    if not api_key:
+        raise RuntimeError("Kein GOOGLE_VISION_API_KEY gesetzt.")
+    b64 = base64.b64encode(image_bytes).decode('utf-8')
+    url = f"https://vision.googleapis.com/v1/images:annotate?key={api_key}"
+    payload = {
+        "requests": [
+            {
+                "image": {"content": b64},
+                "features": [{"type": "TEXT_DETECTION", "maxResults": 1}],
+                "imageContext": {"languageHints": ["de"]}
+            }
+        ]
+    }
+    resp = requests.post(url, json=payload, timeout=20)
+    resp.raise_for_status()
+    data = resp.json()
+    try:
+        annotations = data["responses"][0].get("textAnnotations", [])
+        if annotations:
+            return annotations[0].get("description", "")
+        return ""
+    except Exception:
+        return ""
 
 
-def extract_address_from_text(text: str) -> str:
+def ocr_image_to_text(image_bytes_io: io.BytesIO) -> str:
+    """Versucht zunächst, pytesseract zu verwenden (falls lokal installiert).
+    Falls pytesseract nicht verfügbar ist, fällt diese Funktion auf
+    Google Vision API zurück (benötigt st.secrets['GOOGLE_VISION_API_KEY'] oder ENV).
+    """
+    # 1) lokales Tesseract wenn möglich
+    if TESSERACT_AVAILABLE and TESSERACT_BINARY_OK:
+        img = Image.open(image_bytes_io)
+        img = ImageOps.exif_transpose(img).convert("L")
+        if max(img.size) < 1200:
+            img = img.resize((int(img.size[0]*2), int(img.size[1]*2)), Image.LANCZOS)
+        return pytesseract.image_to_string(img, lang='deu+eng')
+
+    # 2) fallback auf Google Vision API
+    api_key = None
+    if hasattr(st, "secrets"):
+        api_key = st.secrets.get("GOOGLE_VISION_API_KEY")
+    if not api_key:
+        api_key = os.environ.get("GOOGLE_VISION_API_KEY")
+
+    if api_key:
+        return ocr_image_with_google_vision(image_bytes_io.getvalue(), api_key)
+
+    raise RuntimeError("Weder pytesseract noch GOOGLE_VISION_API_KEY verfügbar. Bitte Tesseract installieren oder GOOGLE_VISION_API_KEY setzen.")
+
+def extract_address_from_text(text: str):(text: str) -> str:
     """Heuristische Extraktion einer Adresse aus OCR-Text.
     Gibt die gefundene Adresse als einzelne Zeile zurück oder None.
     Diese Funktion ist intentionally konservativ; du kannst sie an dein Datenformat anpassen.
