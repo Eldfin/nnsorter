@@ -207,7 +207,7 @@ if st.session_state['scanning'] and ocr_possible:
     })();
     </script>
     '''
-    components.html(camera_html, height=450, scrolling=False, key="camera_block")
+    components.html(camera_html, height=450, key="camera_block") 
 
 # ----------------- Bildverarbeitung -----------------
 if st.session_state.get('camera_image'):
