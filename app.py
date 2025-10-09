@@ -146,8 +146,7 @@ with col2:
     st.info("Benutze die Kamera-Schaltfläche unten, um ein Foto zu machen. Danach wird OCR ausgeführt.")
 
 # ----------------- Kameraaufnahme (st.camera_input) -----------------
-st.markdown("### Kamera (Foto aufnehmen)")
-img_file = st.camera_input("Foto aufnehmen")
+img_file = st.camera_input("Adresse mit Kamera aufnehmen (optional)")
 
 if img_file is not None:
     try:
