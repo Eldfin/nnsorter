@@ -281,9 +281,5 @@ st.success("Fertig — die Liste wurde sortiert.")
 if final_route:
     maps_url = make_maps_url_from_route(final_route)
     if maps_url:
-        st.markdown("### Route in Google Maps öffnen")
-        st.write("Tippe den Link auf deinem Handy an — Google Maps sollte deinen aktuellen Standort als Start verwenden.")
         st.markdown(f"[→ Route in Google Maps öffnen]({maps_url})")
-        # optional: als Button (öffnet im Browser/Maps)
-        st.button("Öffnen (im Browser/Maps)", on_click=lambda: st.experimental_set_query_params(open=maps_url))
 
