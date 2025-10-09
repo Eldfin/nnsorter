@@ -107,7 +107,6 @@ def extract_address_from_text(text: str) -> str:
         return None
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
     joined = "\n".join(lines)
-    import re
     m = re.search(r"(\d{5}\s+[A-Za-zÄÖÜäöüß\-\. ]{2,})", joined)
     if m:
         for i, ln in enumerate(lines):
@@ -187,7 +186,6 @@ if st.session_state['scanning'] and ocr_possible:
     '''
     img_dataurl = components.html(camera_html, height=480)
 
-    # Foto verarbeiten
     if img_dataurl:
         try:
             s = str(img_dataurl)
@@ -215,7 +213,7 @@ if not submit:
     st.info("Gib Adressen ein oder scanne sie per Kamera und klicke auf 'Sortieren'.")
     st.stop()
 
-# ----------------- Weiteres wie bisher (Geokodierung + NN-Sortierung) -----------------
+# ----------------- Nearest-Neighbor Sortierung -----------------
 addresses = parse_addresses_from_text(text_input)
 if not addresses:
     st.warning("Keine Adressen eingegeben.")
@@ -228,7 +226,7 @@ if not GEOPY_AVAILABLE:
     st.stop()
 
 with st.spinner("Geokodieren..."):
-    from geopy.geocoders import GoogleV3
+    geolocator = GoogleV3(api_key=GOOGLE_API_KEY)
     for line in addresses:
         parsed = parse_latlon_line(line)
         if parsed:
@@ -236,9 +234,51 @@ with st.spinner("Geokodieren..."):
             coords_map[label] = (lat, lon)
         else:
             try:
-                coords_map[line] = GoogleV3(api_key=GOOGLE_API_KEY).geocode(line).point[:2]
+                loc = geolocator.geocode(line)
+                if loc:
+                    coords_map[line] = (loc.latitude, loc.longitude)
             except Exception as e:
                 geocode_errors.append((line,str(e)))
 
+home_parsed = parse_latlon_line(home_addr)
+if home_parsed:
+    home_coord = (home_parsed[0], home_parsed[1])
+else:
+    try:
+        loc = geolocator.geocode(home_addr)
+        home_coord = (loc.latitude, loc.longitude)
+    except Exception as e:
+        st.error(f"Home-Geokodierung fehlgeschlagen: {e}")
+        st.stop()
+
+priority_list = [line.strip() for line in priority_input.splitlines() if line.strip()]
+priority_coords = []
+for addr in priority_list:
+    try:
+        loc = geolocator.geocode(addr)
+        if loc:
+            priority_coords.append((addr, (loc.latitude, loc.longitude)))
+    except Exception as e:
+        st.warning(f"Priorisierte Adresse konnte nicht geokodiert werden: {addr} → {e}")
+
+remaining_coords_map = {a: coords_map[a] for a in coords_map if a not in [p[0] for p in priority_coords]}
+start_coord_nn = priority_coords[-1][1] if priority_coords else home_coord
+sorted_remaining = nearest_neighbor_sort_by_coords(remaining_coords_map, start_coord_nn)
+final_route = [p[0] for p in priority_coords] + sorted_remaining
+
+# ----------------- Ergebnisse -----------------
 st.subheader("Sortierte Adressen")
-st.text_area("Ergebnis", value="\n".join
+st.text_area("Ergebnis", value="\n".join(final_route), height=250)
+
+col1, col2 = st.columns(2)
+with col1:
+    st.download_button("Download .txt", data=generate_txt(final_route), file_name="sortierte_adressen.txt", mime="text/plain")
+with col2:
+    st.download_button("Download .csv", data=generate_csv_bytes(final_route), file_name="sortierte_adressen.csv", mime="text/csv")
+
+if geocode_errors:
+    st.warning(f"Es gab {len(geocode_errors)} Geokodier-Fehler:")
+    for a, e in geocode_errors:
+        st.write(f"- {a} → {e}")
+
+st.success("Fertig — die Liste wurde sortiert.")
