@@ -175,7 +175,7 @@ if not ocr_possible:
 if st.session_state['scanning'] and ocr_possible:
     st.markdown("**Kamera aktiv — Foto aufnehmen. Nach der Erkennung bleibt die Kamera bereit.**")
 
-    camera_html = '''
+    camera_html = """
     <div style="max-width:480px; margin:auto; text-align:center;">
         <div style="overflow:hidden; max-height:320px; border:1px solid #ddd;">
             <video id="video" autoplay playsinline style="width:100%;"></video>
@@ -191,6 +191,7 @@ if st.session_state['scanning'] and ocr_possible:
         const video = document.getElementById('video');
         const canvas = document.getElementById('canvas');
         const status = document.getElementById('status');
+
         try {
             const stream = await navigator.mediaDevices.getUserMedia({
                 video:{facingMode:{ideal:'environment'}, width:{ideal:1280}, height:{ideal:720}},
@@ -198,6 +199,7 @@ if st.session_state['scanning'] and ocr_possible:
             });
             video.srcObject = stream;
             await video.play();
+
             const [track] = stream.getVideoTracks();
             const capabilities = track.getCapabilities();
             if(capabilities.zoom){
@@ -206,21 +208,31 @@ if st.session_state['scanning'] and ocr_possible:
             status.textContent='Kamera bereit';
         } catch(e){status.textContent='Kamera nicht verfügbar: '+e; return;}
 
-        document.getElementById('capture').addEventListener('click', ()=>{
+        const captureBtn = document.getElementById('capture');
+        captureBtn.addEventListener('click', ()=>{
             const w = video.videoWidth, h = video.videoHeight;
             const cropW = Math.floor(w*0.8), cropH = Math.floor(h*0.5);
             const sx = Math.floor((w-cropW)/2), sy = Math.floor((h-cropH)/2);
             canvas.width = cropW; canvas.height = cropH;
             const ctx = canvas.getContext('2d');
-            ctx.drawImage(video,sx,sy,cropW,cropH,0,0,cropW,cropH);
+            ctx.drawImage(video, sx, sy, cropW, cropH, 0, 0, cropW, cropH);
             const dataUrl = canvas.toDataURL('image/jpeg',0.9);
-            window.parent.postMessage({isStreamlitMessage:true,type:'streamlit:setComponentValue',value:dataUrl}, '*');
+
+            // Streamlit-kompatible Nachricht
+            const streamlitMessage = {
+                isStreamlitMessage: true,
+                type: 'streamlit:setComponentValue',
+                value: dataUrl
+            };
+            window.parent.postMessage(streamlitMessage, '*');
             status.textContent='Foto gesendet';
         });
     })();
     </script>
-    '''
-    components.html(camera_html, height=400, key="camera_block")
+    """
+
+    # KEIN Rückgabewert abfragen! Nur rendern und JS sendet den Wert über Session State
+    components.html(camera_html, height=400, scrolling=False, key="camera_block")
 
 # ----------------- OCR Verarbeitung -----------------
 if st.session_state['camera_image']:
