@@ -139,12 +139,6 @@ if uploaded_file is not None:
     except Exception as e:
         st.error(f"Fehler beim Lesen der Datei: {e}")
 
-col1, col2 = st.columns([1,2])
-with col1:
-    auto_add = st.checkbox("Automatisch erkannte Adresse sofort einfügen", value=True)
-with col2:
-    st.info("Benutze die Kamera-Schaltfläche unten, um ein Foto zu machen. Danach wird OCR ausgeführt.")
-
 # ----------------- Kameraaufnahme (st.camera_input) -----------------
 img_file = st.camera_input("Adresse mit Kamera aufnehmen (optional)")
 
@@ -165,13 +159,9 @@ if img_file is not None:
                 text = ocr_image_with_google_vision(img_bytes, GOOGLE_API_KEY)
                 addr = extract_address_from_text(text)
                 if addr:
-                    if auto_add:
-                        existing = st.session_state.get('scanned_text','').strip()
-                        st.session_state['scanned_text'] = (existing + "\n" + addr) if existing else addr
-                        st.success(f"Adresse erkannt und hinzugefügt: {addr}")
-                    else:
-                        st.info(f"Erkannte Adresse: {addr}")
-                        st.text_area("OCR Rohtext", value=text, height=150)
+                    existing = st.session_state.get('scanned_text','').strip()
+                    st.session_state['scanned_text'] = (existing + "\n" + addr) if existing else addr
+                    st.success(f"Adresse erkannt und hinzugefügt: {addr}")
                 else:
                     st.warning("Keine Adresse im Bild erkannt. Rohtext (zur Prüfung):")
                     st.text_area("OCR Rohtext", value=text, height=150)
