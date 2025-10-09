@@ -1,5 +1,4 @@
 # app.py
-# Streamlit NN-Sortierer mit Kamera-OCR (Google Vision) unter Verwendung eines einzigen GOOGLE_API_KEY
 import streamlit as st
 import os
 import io
@@ -10,18 +9,18 @@ import hashlib
 import re
 from typing import List, Tuple
 from math import radians, sin, cos, atan2, sqrt
-import streamlit.components.v1 as components
+from PIL import Image, ImageOps
 
-# Geopy (Google geocoding)
+# optional: geopy
 try:
     from geopy.geocoders import GoogleV3
     GEOPY_AVAILABLE = True
 except Exception:
     GEOPY_AVAILABLE = False
 
-# ----------------- KONFIGURATION -----------------
+# ----------------- Konfiguration -----------------
 HOME_ADDRESS_DEFAULT = "Rudolf-Diesel-Straße 2, 35463 Fernwald, Germany"
-st.set_page_config(page_title="NN-Sortierer (Streamlit) mit Kamera-OCR", layout="centered")
+st.set_page_config(page_title="NN-Sortierer mit Kamera-OCR", layout="centered")
 st.title("Nearest-Neighbor Sortierer — Adressen (mit Kamera-OCR)")
 
 # ----------------- Hilfsfunktionen -----------------
@@ -102,11 +101,13 @@ def ocr_image_with_google_vision(image_bytes: bytes, api_key: str) -> str:
     except Exception:
         return ""
 
+# ----------------- heuristische Adress-Extraktion -----------------
 def extract_address_from_text(text: str) -> str:
     if not text:
         return None
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
     joined = "\n".join(lines)
+    # Suche PLZ + Ort
     m = re.search(r"(\d{5}\s+[A-Za-zÄÖÜäöüß\-\. ]{2,})", joined)
     if m:
         for i, ln in enumerate(lines):
@@ -115,132 +116,90 @@ def extract_address_from_text(text: str) -> str:
                 if street and re.search(r"\d", street):
                     return f"{street}, {lines[i]}"
                 return lines[i]
+    # einfache Straße+Nr
     for ln in lines:
         if re.search(r"\b\S+\s+\d+[a-zA-Z]?\b", ln):
             return ln
     return lines[0] if lines else None
 
-# ----------------- UI -----------------
-home_addr = st.text_input("Home-Adresse (Startpunkt)", value=HOME_ADDRESS_DEFAULT)
-uploaded_file = st.file_uploader("adressen.txt / adressen.csv hochladen (optional)", type=["txt","csv"])
+# ----------------- Session state -----------------
+if 'scanned_text' not in st.session_state:
+    st.session_state['scanned_text'] = ""
+if 'camera_last_hash' not in st.session_state:
+    st.session_state['camera_last_hash'] = None
 
+# ----------------- UI: Home / Upload / Optionen -----------------
+home_addr = st.text_input("Home-Adresse (Startpunkt)", value=HOME_ADDRESS_DEFAULT)
+
+uploaded_file = st.file_uploader("adressen.txt / adressen.csv hochladen (optional)", type=["txt","csv"])
 if uploaded_file is not None:
     try:
-        content = uploaded_file.read().decode("utf-8")
-        st.session_state['scanned_text'] = "\n".join([line.strip() for line in content.splitlines() if line.strip()])
+        text = uploaded_file.read().decode("utf-8")
+        st.session_state['scanned_text'] = "\n".join([line.strip() for line in text.splitlines() if line.strip()])
     except Exception as e:
         st.error(f"Fehler beim Lesen der Datei: {e}")
 
-if 'scanning' not in st.session_state:
-    st.session_state['scanning'] = False
-if 'camera_last_hash' not in st.session_state:
-    st.session_state['camera_last_hash'] = None
-if 'scanned_text' not in st.session_state:
-    st.session_state['scanned_text'] = ""
-if 'captured_image' not in st.session_state:
-    st.session_state['captured_image'] = None
-
-col1, col2, col3 = st.columns([1,1,2])
+col1, col2 = st.columns([1,2])
 with col1:
-    if st.button("Start Kamera-Scan"):
-        st.session_state['scanning'] = True
-with col2:
-    if st.button("Stop Kamera-Scan"):
-        st.session_state['scanning'] = False
-with col3:
     auto_add = st.checkbox("Automatisch erkannte Adresse sofort einfügen", value=True)
+with col2:
+    st.info("Benutze die Kamera-Schaltfläche unten, um ein Foto zu machen. Danach wird OCR ausgeführt.")
 
-ocr_possible = bool(GOOGLE_API_KEY)
-if not ocr_possible:
-    st.warning("GOOGLE_API_KEY nicht gefunden. Kamera-Scan deaktiviert.")
+# ----------------- Kameraaufnahme (st.camera_input) -----------------
+st.markdown("### Kamera (Foto aufnehmen)")
+img_file = st.camera_input("Foto aufnehmen")
 
-# ----------------- Kamera HTML -----------------
-if st.session_state['scanning'] and ocr_possible:
-    st.markdown("**Kamera aktiv — Foto aufnehmen. Nach der Erkennung bleibt Kamera bereit.**")
-    camera_html = '''
-    <div style="max-width:480px; margin:auto; text-align:center;">
-        <div style="overflow:hidden; max-height:320px; border:1px solid #ddd;">
-            <video id="video" autoplay playsinline style="width:100%;"></video>
-        </div>
-        <div style="margin-top:8px;">
-            <button id="capture" style="width:150px; height:40px; font-size:16px;">Foto aufnehmen</button>
-            <span id="status" style="margin-left:8px;"></span>
-        </div>
-        <canvas id="canvas" style="display:none;"></canvas>
-    </div>
-    <script>
-    (async function(){
-        const video = document.getElementById('video');
-        const canvas = document.getElementById('canvas');
-        const status = document.getElementById('status');
-        try {
-            const stream = await navigator.mediaDevices.getUserMedia({
-                video:{facingMode:{ideal:'environment'}, width:{ideal:1280}, height:{ideal:720}},
-                audio:false
-            });
-            video.srcObject = stream;
-            await video.play();
-            const [track] = stream.getVideoTracks();
-            const capabilities = track.getCapabilities();
-            if(capabilities.zoom){
-                track.applyConstraints({ advanced: [{ zoom: capabilities.zoom.max }] });
-            }
-            status.textContent='Kamera bereit';
-        } catch(e){status.textContent='Kamera nicht verfügbar: '+e; return;}
-        document.getElementById('capture').addEventListener('click', ()=>{
-            const w = video.videoWidth, h = video.videoHeight;
-            const cropW = Math.floor(w*0.8), cropH = Math.floor(h*0.5);
-            const sx = Math.floor((w-cropW)/2), sy = Math.floor((h-cropH)/2);
-            canvas.width = cropW; canvas.height = cropH;
-            const ctx = canvas.getContext('2d');
-            ctx.drawImage(video,sx,sy,cropW,cropH,0,0,cropW,cropH);
-            const dataUrl = canvas.toDataURL('image/jpeg',0.9);
-            window.parent.postMessage({isStreamlitMessage:true,type:'streamlit:setComponentValue',key:'captured_image',value:dataUrl}, '*');
-            status.textContent='Foto gesendet';
-        });
-    })();
-    </script>
-    '''
-    components.html(camera_html, height=450, scrolling=False, key="camera_block")
-
-# ----------------- Verarbeiten des aufgenommenen Bildes -----------------
-if st.session_state['captured_image']:
+if img_file is not None:
     try:
-        b64 = st.session_state['captured_image'].split(",",1)[1]
-        img_bytes = base64.b64decode(b64)
+        # Bild korrekt orientieren und in bytes
+        img = Image.open(img_file)
+        img = ImageOps.exif_transpose(img)
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=90)
+        img_bytes = buf.getvalue()
+
+        # Verhindere Doppelverarbeitung
         h = hashlib.sha256(img_bytes).hexdigest()
         if h != st.session_state.get('camera_last_hash'):
             st.session_state['camera_last_hash'] = h
-            with st.spinner('OCR via Google Vision...'):
+            with st.spinner("OCR via Google Vision..."):
                 text = ocr_image_with_google_vision(img_bytes, GOOGLE_API_KEY)
                 addr = extract_address_from_text(text)
-                if addr and auto_add:
-                    existing = st.session_state.get('scanned_text','').strip()
-                    st.session_state['scanned_text'] = (existing+'\n'+addr) if existing else addr
-                    st.success(f"Adresse erkannt und hinzugefügt: {addr}")
+                if addr:
+                    if auto_add:
+                        existing = st.session_state.get('scanned_text','').strip()
+                        st.session_state['scanned_text'] = (existing + "\n" + addr) if existing else addr
+                        st.success(f"Adresse erkannt und hinzugefügt: {addr}")
+                    else:
+                        st.info(f"Erkannte Adresse: {addr}")
+                        st.text_area("OCR Rohtext", value=text, height=150)
+                else:
+                    st.warning("Keine Adresse im Bild erkannt. Rohtext (zur Prüfung):")
+                    st.text_area("OCR Rohtext", value=text, height=150)
     except Exception as e:
-        st.error(f'Fehler bei der Verarbeitung des Kamerabildes: {e}')
+        st.error(f"Fehler bei Bildverarbeitung/OCR: {e}")
 
 # ----------------- Haupt-Textfelder -----------------
 text_input = st.text_area("Adressen (eine pro Zeile)", height=200, value=st.session_state.get('scanned_text',''))
-priority_input = st.text_area("Priorisierte Adressen (optional, werden zuerst besucht)", height=100)
+priority_input = st.text_area("Priorisierte Adressen (optional, werden zuerst besucht)", height=100, placeholder="Adresse A\nAdresse B\n...")
+
 submit = st.button("Sortieren")
 if not submit:
-    st.info("Gib Adressen ein oder scanne sie per Kamera und klicke auf 'Sortieren'.")
+    st.info("Adressen eingeben oder scannen und dann 'Sortieren' klicken.")
     st.stop()
 
-# ----------------- Nearest-Neighbor Sortierung -----------------
+# ----------------- NN-Sortierung / Geokodierung -----------------
 addresses = parse_addresses_from_text(text_input)
 if not addresses:
     st.warning("Keine Adressen eingegeben.")
     st.stop()
 
-coords_map = {}
-geocode_errors = []
 if not GEOPY_AVAILABLE:
-    st.error("geopy nicht installiert. pip install geopy")
+    st.error("geopy nicht installiert. Installiere mit: pip install geopy")
     st.stop()
 
+coords_map = {}
+geocode_errors = []
 with st.spinner("Geokodieren..."):
     geolocator = GoogleV3(api_key=GOOGLE_API_KEY)
     for line in addresses:
@@ -253,38 +212,46 @@ with st.spinner("Geokodieren..."):
                 loc = geolocator.geocode(line)
                 if loc:
                     coords_map[line] = (loc.latitude, loc.longitude)
+                else:
+                    geocode_errors.append((line, "Nicht gefunden"))
             except Exception as e:
-                geocode_errors.append((line,str(e)))
+                geocode_errors.append((line, str(e)))
 
-home_parsed = parse_latlon_line(home_addr)
-if home_parsed:
-    home_coord = (home_parsed[0], home_parsed[1])
-else:
-    try:
-        loc = geolocator.geocode(home_addr)
-        home_coord = (loc.latitude, loc.longitude)
-    except Exception as e:
-        st.error(f"Home-Geokodierung fehlgeschlagen: {e}")
-        st.stop()
+    # Home-Adresse
+    home_parsed = parse_latlon_line(home_addr)
+    if home_parsed:
+        home_coord = (home_parsed[0], home_parsed[1])
+    else:
+        try:
+            loc = geolocator.geocode(home_addr)
+            if loc:
+                home_coord = (loc.latitude, loc.longitude)
+            else:
+                st.error("Home-Adresse konnte nicht geokodiert werden.")
+                st.stop()
+        except Exception as e:
+            st.error(f"Home-Geokodierung fehlgeschlagen: {e}")
+            st.stop()
 
-priority_list = [line.strip() for line in priority_input.splitlines() if line.strip()]
-priority_coords = []
-for addr in priority_list:
-    try:
-        loc = geolocator.geocode(addr)
-        if loc:
-            priority_coords.append((addr, (loc.latitude, loc.longitude)))
-    except Exception as e:
-        st.warning(f"Priorisierte Adresse konnte nicht geokodiert werden: {addr} → {e}")
+    # Prioritäten
+    priority_list = [line.strip() for line in priority_input.splitlines() if line.strip()]
+    priority_coords = []
+    for addr in priority_list:
+        try:
+            loc = geolocator.geocode(addr)
+            if loc:
+                priority_coords.append((addr, (loc.latitude, loc.longitude)))
+        except Exception as e:
+            st.warning(f"Priorisierte Adresse konnte nicht geokodiert werden und wird ignoriert: {addr} → {e}")
 
-remaining_coords_map = {a: coords_map[a] for a in coords_map if a not in [p[0] for p in priority_coords]}
-start_coord_nn = priority_coords[-1][1] if priority_coords else home_coord
-sorted_remaining = nearest_neighbor_sort_by_coords(remaining_coords_map, start_coord_nn)
-final_route = [p[0] for p in priority_coords] + sorted_remaining
+    remaining_coords_map = {a: coords_map[a] for a in coords_map if a not in [p[0] for p in priority_coords]}
+    start_coord_nn = priority_coords[-1][1] if priority_coords else home_coord
+    sorted_remaining = nearest_neighbor_sort_by_coords(remaining_coords_map, start_coord_nn)
+    final_route = [p[0] for p in priority_coords] + sorted_remaining
 
-# ----------------- Ergebnisse -----------------
+# ----------------- Ergebnis / Download -----------------
 st.subheader("Sortierte Adressen")
-st.text_area("Ergebnis", value="\n".join(final_route), height=250)
+st.text_area("Ergebnis (eine Adresse pro Zeile)", value="\n".join(final_route), height=250)
 
 col1, col2 = st.columns(2)
 with col1:
