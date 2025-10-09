@@ -265,3 +265,17 @@ if geocode_errors:
         st.write(f"- {a} → {e}")
 
 st.success("Fertig — die Liste wurde sortiert.")
+
+# ---- Google Maps Route-Link erzeugen ----
+if final_route:
+    # URL-sicher escapen
+    from urllib.parse import quote_plus
+    encoded_stops = [quote_plus(addr) for addr in final_route]
+    maps_url = "https://www.google.com/maps/dir/" + "/".join(encoded_stops)
+
+    st.markdown("### 📍 Route in Google Maps öffnen")
+    st.markdown(
+        f"[👉 Route anzeigen und starten]({maps_url})",
+        unsafe_allow_html=True
+    )
+
