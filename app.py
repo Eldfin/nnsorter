@@ -1,11 +1,12 @@
 # app.py
 import streamlit as st
+import os
 import io
+import csv
 import base64
+import requests
 import hashlib
 import re
-import requests
-import csv
 from typing import List, Tuple
 from math import radians, sin, cos, atan2, sqrt
 import streamlit.components.v1 as components
@@ -26,7 +27,7 @@ st.title("Nearest-Neighbor Sortierer — Adressen (mit Kamera-OCR)")
 def get_google_api_key():
     if hasattr(st, "secrets") and "GOOGLE_API_KEY" in st.secrets:
         return st.secrets["GOOGLE_API_KEY"]
-    return st.environ.get("GOOGLE_API_KEY")
+    return os.environ.get("GOOGLE_API_KEY")
 
 GOOGLE_API_KEY = get_google_api_key()
 
@@ -125,6 +126,8 @@ if 'camera_last_hash' not in st.session_state:
     st.session_state['camera_last_hash'] = None
 if 'scanned_text' not in st.session_state:
     st.session_state['scanned_text'] = ""
+if 'camera_image' not in st.session_state:
+    st.session_state['camera_image'] = None
 
 # ----------------- UI -----------------
 home_addr = st.text_input("Home-Adresse (Startpunkt)", value=HOME_ADDRESS_DEFAULT)
@@ -150,7 +153,7 @@ ocr_possible = bool(GOOGLE_API_KEY)
 if not ocr_possible:
     st.warning("GOOGLE_API_KEY nicht gefunden. Kamera-Scan deaktiviert.")
 
-# ----------------- HTML Kamera -----------------
+# ----------------- Kamera HTML -----------------
 if st.session_state['scanning'] and ocr_possible:
     st.markdown("**Kamera aktiv — Foto aufnehmen. Nach der Erkennung bleibt Kamera bereit.**")
     camera_html = '''
@@ -176,8 +179,7 @@ if st.session_state['scanning'] and ocr_possible:
             });
             video.srcObject = stream;
             await video.play();
-    
-            // Zoom auf Maximum, falls unterstützt
+
             const [track] = stream.getVideoTracks();
             const capabilities = track.getCapabilities();
             if(capabilities.zoom){
@@ -185,7 +187,7 @@ if st.session_state['scanning'] and ocr_possible:
             }
             status.textContent='Kamera bereit';
         } catch(e){status.textContent='Kamera nicht verfügbar: '+e; return;}
-    
+
         document.getElementById('capture').addEventListener('click', ()=>{
             const w = video.videoWidth, h = video.videoHeight;
             const cropW = Math.floor(w*0.8), cropH = Math.floor(h*0.5);
@@ -194,32 +196,36 @@ if st.session_state['scanning'] and ocr_possible:
             const ctx = canvas.getContext('2d');
             ctx.drawImage(video,sx,sy,cropW,cropH,0,0,cropW,cropH);
             const dataUrl = canvas.toDataURL('image/jpeg',0.9);
-            window.parent.postMessage({isStreamlitMessage:true,type:'streamlit:setComponentValue',value:dataUrl}, '*');
+            window.parent.postMessage({
+                isStreamlitMessage:true,
+                type:'streamlit:setComponentValue',
+                key:'camera_image',
+                value:dataUrl
+            }, '*');
             status.textContent='Foto gesendet';
         });
     })();
     </script>
     '''
-    img_dataurl = components.html(camera_html, height=420, scrolling=False, key="camera_block")
+    components.html(camera_html, height=450, scrolling=False, key="camera_block")
 
-    if img_dataurl:
-        try:
-            s = str(img_dataurl)
-            if s.startswith('data:'):
-                header,b64 = s.split(',',1)
-                img_bytes = base64.b64decode(b64)
-                h = hashlib.sha256(img_bytes).hexdigest()
-                if h != st.session_state.get('camera_last_hash'):
-                    st.session_state['camera_last_hash'] = h
-                    with st.spinner('OCR via Google Vision...'):
-                        text = ocr_image_with_google_vision(img_bytes, GOOGLE_API_KEY)
-                        addr = extract_address_from_text(text)
-                        if addr and auto_add:
-                            existing = st.session_state.get('scanned_text','').strip()
-                            st.session_state['scanned_text'] = (existing+'\n'+addr) if existing else addr
-                            st.success(f"Adresse erkannt und hinzugefügt: {addr}")
-        except Exception as e:
-            st.error(f'Fehler bei der Verarbeitung des Kamerabildes: {e}')
+# ----------------- Bildverarbeitung -----------------
+if st.session_state.get('camera_image'):
+    try:
+        s = st.session_state['camera_image']
+        img_bytes = base64.b64decode(s.split(",")[1])
+        h = hashlib.sha256(img_bytes).hexdigest()
+        if h != st.session_state.get('camera_last_hash'):
+            st.session_state['camera_last_hash'] = h
+            with st.spinner('OCR via Google Vision...'):
+                text = ocr_image_with_google_vision(img_bytes, GOOGLE_API_KEY)
+                addr = extract_address_from_text(text)
+                if addr and auto_add:
+                    existing = st.session_state.get('scanned_text','').strip()
+                    st.session_state['scanned_text'] = (existing+'\n'+addr) if existing else addr
+                    st.success(f"Adresse erkannt und hinzugefügt: {addr}")
+    except Exception as e:
+        st.error(f'Fehler bei der Verarbeitung des Kamerabildes: {e}')
 
 # ----------------- Haupt-Textfeld -----------------
 text_input = st.text_area("Adressen (eine pro Zeile)", height=200, value=st.session_state.get('scanned_text',''))
