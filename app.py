@@ -120,23 +120,24 @@ def extract_address_from_text(text: str) -> str:
             return ln
     return lines[0] if lines else None
 
-# ----------------- UI -----------------
-home_addr = st.text_input("Home-Adresse (Startpunkt)", value=HOME_ADDRESS_DEFAULT)
-uploaded_file = st.file_uploader("adressen.txt / adressen.csv hochladen (optional)", type=["txt","csv"])
-
-if uploaded_file is not None:
-    try:
-        content = uploaded_file.read().decode("utf-8")
-        st.session_state['scanned_text'] = "\n".join([line.strip() for line in content.splitlines() if line.strip()])
-    except Exception as e:
-        st.error(f"Fehler beim Lesen der Datei: {e}")
-
+# ----------------- SESSION STATE -----------------
 if 'scanning' not in st.session_state:
     st.session_state['scanning'] = False
 if 'camera_last_hash' not in st.session_state:
     st.session_state['camera_last_hash'] = None
 if 'scanned_text' not in st.session_state:
     st.session_state['scanned_text'] = ""
+
+# ----------------- UI -----------------
+home_addr = st.text_input("Home-Adresse (Startpunkt)", value=HOME_ADDRESS_DEFAULT)
+uploaded_file = st.file_uploader("adressen.txt / adressen.csv hochladen (optional)", type=["txt","csv"])
+
+if uploaded_file:
+    try:
+        content = uploaded_file.read().decode("utf-8")
+        st.session_state['scanned_text'] = "\n".join([line.strip() for line in content.splitlines() if line.strip()])
+    except Exception as e:
+        st.error(f"Fehler beim Lesen der Datei: {e}")
 
 col1, col2, col3 = st.columns([1,1,2])
 with col1:
@@ -152,15 +153,17 @@ ocr_possible = bool(GOOGLE_API_KEY)
 if not ocr_possible:
     st.warning("GOOGLE_API_KEY nicht gefunden. Kamera-Scan deaktiviert.")
 
+# ----------------- Kamera Vorschau + Aufnahme -----------------
 if st.session_state['scanning'] and ocr_possible:
-    st.markdown("**Kamera aktiv — Foto aufnehmen. Nach der Erkennung bleibt Kamera bereit.**")
+    st.markdown("**Kamera aktiv — Vorschau + Foto aufnehmen. Nach der Erkennung bleibt Kamera bereit.**")
+
+    # HTML Vorschau
     camera_html = '''
     <div style="max-width:480px; margin:auto; text-align:center;">
         <div style="overflow:hidden; max-height:320px; border:1px solid #ddd;">
             <video id="video" autoplay playsinline style="width:100%;"></video>
         </div>
         <div style="margin-top:8px;">
-            <button id="capture" style="width:150px; height:40px; font-size:16px;">Foto aufnehmen</button>
             <span id="status" style="margin-left:8px;"></span>
         </div>
         <canvas id="canvas" style="display:none;"></canvas>
@@ -177,53 +180,37 @@ if st.session_state['scanning'] and ocr_possible:
             });
             video.srcObject = stream;
             await video.play();
-    
-            // Zoom auf Maximum, falls unterstützt
             const [track] = stream.getVideoTracks();
             const capabilities = track.getCapabilities();
             if(capabilities.zoom){
                 track.applyConstraints({ advanced: [{ zoom: capabilities.zoom.max }] });
             }
             status.textContent='Kamera bereit';
-        } catch(e){status.textContent='Kamera nicht verfügbar: '+e; return;}
-    
-        document.getElementById('capture').addEventListener('click', ()=>{
-            const w = video.videoWidth, h = video.videoHeight;
-            const cropW = Math.floor(w*0.8), cropH = Math.floor(h*0.5);
-            const sx = Math.floor((w-cropW)/2), sy = Math.floor((h-cropH)/2);
-            canvas.width = cropW; canvas.height = cropH;
-            const ctx = canvas.getContext('2d');
-            ctx.drawImage(video,sx,sy,cropW,cropH,0,0,cropW,cropH);
-            const dataUrl = canvas.toDataURL('image/jpeg',0.9);
-            window.parent.postMessage({isStreamlitMessage:true,type:'streamlit:setComponentValue',value:dataUrl}, '*');
-            status.textContent='Foto gesendet';
-        });
+        } catch(e){status.textContent='Kamera nicht verfügbar: '+e;}
     })();
     </script>
     '''
-    img_dataurl = components.html(camera_html, height=400)
+    components.html(camera_html, height=360)
 
+    # st.camera_input Button
+    img_file = st.camera_input("Foto aufnehmen")
+    if img_file:
+        img_bytes = img_file.getvalue()
+        h = hashlib.sha256(img_bytes).hexdigest()
+        if h != st.session_state.get('camera_last_hash'):
+            st.session_state['camera_last_hash'] = h
+            with st.spinner('OCR via Google Vision...'):
+                try:
+                    text = ocr_image_with_google_vision(img_bytes, GOOGLE_API_KEY)
+                    addr = extract_address_from_text(text)
+                    if addr and auto_add:
+                        existing = st.session_state.get('scanned_text','').strip()
+                        st.session_state['scanned_text'] = (existing+'\n'+addr) if existing else addr
+                        st.success(f"Adresse erkannt und hinzugefügt: {addr}")
+                except Exception as e:
+                    st.error(f'OCR fehlgeschlagen: {e}')
 
-    if img_dataurl:
-        try:
-            s = str(img_dataurl)
-            if s.startswith('data:'):
-                header,b64 = s.split(',',1)
-                img_bytes = base64.b64decode(b64)
-                h = hashlib.sha256(img_bytes).hexdigest()
-                if h != st.session_state.get('camera_last_hash'):
-                    st.session_state['camera_last_hash'] = h
-                    with st.spinner('OCR via Google Vision...'):
-                        text = ocr_image_with_google_vision(img_bytes, GOOGLE_API_KEY)
-                        addr = extract_address_from_text(text)
-                        if addr and auto_add:
-                            existing = st.session_state.get('scanned_text','').strip()
-                            st.session_state['scanned_text'] = (existing+'\n'+addr) if existing else addr
-                            st.success(f"Adresse erkannt und hinzugefügt: {addr}")
-        except Exception as e:
-            st.error(f'Fehler bei der Verarbeitung des Kamerabildes: {e}')
-
-# Haupt-Textfeld
+# ----------------- Haupt Textfelder -----------------
 text_input = st.text_area("Adressen (eine pro Zeile)", height=200, value=st.session_state.get('scanned_text',''))
 priority_input = st.text_area("Priorisierte Adressen (optional, werden zuerst besucht)", height=100)
 submit = st.button("Sortieren")
@@ -231,7 +218,7 @@ if not submit:
     st.info("Gib Adressen ein oder scanne sie per Kamera und klicke auf 'Sortieren'.")
     st.stop()
 
-# ----------------- Nearest-Neighbor Sortierung -----------------
+# ----------------- NN-Sortierung -----------------
 addresses = parse_addresses_from_text(text_input)
 if not addresses:
     st.warning("Keine Adressen eingegeben.")
