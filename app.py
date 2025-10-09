@@ -1,12 +1,25 @@
 # app.py
+# Streamlit NN-Sortierer mit Kamera-OCR (Google Vision) unter Verwendung eines einzigen GOOGLE_API_KEY
 import streamlit as st
-import streamlit.components.v1 as components
-import os, io, csv, base64, hashlib, re, requests
+import os
+import io
+import csv
+import base64
+import requests
+import hashlib
+import re
 from typing import List, Tuple
 from math import radians, sin, cos, atan2, sqrt
-from geopy.geocoders import GoogleV3
+import streamlit.components.v1 as components
 
-# ----------------- KONFIG -----------------
+# Geopy (Google geocoding)
+try:
+    from geopy.geocoders import GoogleV3
+    GEOPY_AVAILABLE = True
+except Exception:
+    GEOPY_AVAILABLE = False
+
+# ----------------- KONFIGURATION -----------------
 HOME_ADDRESS_DEFAULT = "Rudolf-Diesel-Straße 2, 35463 Fernwald, Germany"
 st.set_page_config(page_title="NN-Sortierer (Streamlit) mit Kamera-OCR", layout="centered")
 st.title("Nearest-Neighbor Sortierer — Adressen (mit Kamera-OCR)")
@@ -65,7 +78,7 @@ def generate_csv_bytes(data_list: List[str]) -> bytes:
         writer.writerow([r])
     return buf.getvalue().encode("utf-8")
 
-# ----------------- OCR via Google Vision -----------------
+# ----------------- Google Vision OCR -----------------
 def ocr_image_with_google_vision(image_bytes: bytes, api_key: str) -> str:
     if not api_key:
         raise RuntimeError("Kein GOOGLE_API_KEY gesetzt für Vision OCR.")
@@ -107,19 +120,18 @@ def extract_address_from_text(text: str) -> str:
             return ln
     return lines[0] if lines else None
 
-# ----------------- Session State -----------------
-if 'scanning' not in st.session_state:
-    st.session_state['scanning'] = False
-if 'camera_image' not in st.session_state:
-    st.session_state['camera_image'] = None
+# ----------------- SESSION STATE -----------------
 if 'scanned_text' not in st.session_state:
     st.session_state['scanned_text'] = ""
+if 'camera_last_hash' not in st.session_state:
+    st.session_state['camera_last_hash'] = None
+if 'scanning' not in st.session_state:
+    st.session_state['scanning'] = False
 
 # ----------------- UI -----------------
 home_addr = st.text_input("Home-Adresse (Startpunkt)", value=HOME_ADDRESS_DEFAULT)
 uploaded_file = st.file_uploader("adressen.txt / adressen.csv hochladen (optional)", type=["txt","csv"])
-
-if uploaded_file:
+if uploaded_file is not None:
     try:
         content = uploaded_file.read().decode("utf-8")
         st.session_state['scanned_text'] = "\n".join([line.strip() for line in content.splitlines() if line.strip()])
@@ -140,9 +152,9 @@ ocr_possible = bool(GOOGLE_API_KEY)
 if not ocr_possible:
     st.warning("GOOGLE_API_KEY nicht gefunden. Kamera-Scan deaktiviert.")
 
-# ----------------- HTML Kamera -----------------
+# ----------------- HTML Kamera + Button -----------------
 if st.session_state['scanning'] and ocr_possible:
-    st.markdown("**Kamera aktiv — Foto aufnehmen. Nach der Erkennung bleibt Kamera bereit.**")
+    st.markdown("**Kamera aktiv — Rückkamera, Foto aufnehmen.**")
     camera_html = '''
     <div style="max-width:480px; margin:auto; text-align:center;">
         <div style="overflow:hidden; max-height:320px; border:1px solid #ddd;">
@@ -166,46 +178,51 @@ if st.session_state['scanning'] and ocr_possible:
             });
             video.srcObject = stream;
             await video.play();
+
             const [track] = stream.getVideoTracks();
             const capabilities = track.getCapabilities();
-            if(capabilities.zoom){ track.applyConstraints({advanced:[{zoom:capabilities.zoom.max}]}); }
+            if(capabilities.zoom){
+                track.applyConstraints({ advanced: [{ zoom: capabilities.zoom.max }] });
+            }
             status.textContent='Kamera bereit';
         } catch(e){status.textContent='Kamera nicht verfügbar: '+e; return;}
 
         document.getElementById('capture').addEventListener('click', ()=>{
-            const w=video.videoWidth, h=video.videoHeight;
-            const cropW=Math.floor(w*0.8), cropH=Math.floor(h*0.5);
-            const sx=Math.floor((w-cropW)/2), sy=Math.floor((h-cropH)/2);
-            canvas.width=cropW; canvas.height=cropH;
-            const ctx=canvas.getContext('2d');
+            const w = video.videoWidth, h = video.videoHeight;
+            const cropW = Math.floor(w*0.8), cropH = Math.floor(h*0.5);
+            const sx = Math.floor((w-cropW)/2), sy = Math.floor((h-cropH)/2);
+            canvas.width = cropW; canvas.height = cropH;
+            const ctx = canvas.getContext('2d');
             ctx.drawImage(video,sx,sy,cropW,cropH,0,0,cropW,cropH);
-            const dataUrl=canvas.toDataURL('image/jpeg',0.9);
-            window.parent.postMessage({isStreamlitMessage:true,type:'streamlit:setComponentValue',key:'camera_image',value:dataUrl}, '*');
+            const dataUrl = canvas.toDataURL('image/jpeg',0.9);
+            window.parent.postMessage({isStreamlitMessage:true,type:'streamlit:setComponentValue',value:dataUrl}, '*');
             status.textContent='Foto gesendet';
         });
     })();
     </script>
     '''
-    components.html(camera_html, height=450, scrolling=False, key="camera_block")
+    img_dataurl = components.html(camera_html, height=450, scrolling=False, key="camera_block")
 
-# ----------------- Kamera Bild verarbeiten -----------------
-if st.session_state['camera_image']:
-    s = st.session_state['camera_image']
-    if s.startswith('data:'):
-        _, b64 = s.split(',',1)
-        img_bytes = base64.b64decode(b64)
-        h = hashlib.sha256(img_bytes).hexdigest()
-        if 'camera_last_hash' not in st.session_state or h != st.session_state['camera_last_hash']:
-            st.session_state['camera_last_hash'] = h
-            with st.spinner('OCR via Google Vision...'):
-                text = ocr_image_with_google_vision(img_bytes, GOOGLE_API_KEY)
-                addr = extract_address_from_text(text)
-                if addr and auto_add:
-                    existing = st.session_state.get('scanned_text','').strip()
-                    st.session_state['scanned_text'] = (existing+'\n'+addr) if existing else addr
-                    st.success(f"Adresse erkannt und hinzugefügt: {addr}")
+    if img_dataurl:
+        try:
+            s = str(img_dataurl)
+            if s.startswith('data:'):
+                header,b64 = s.split(',',1)
+                img_bytes = base64.b64decode(b64)
+                h = hashlib.sha256(img_bytes).hexdigest()
+                if h != st.session_state.get('camera_last_hash'):
+                    st.session_state['camera_last_hash'] = h
+                    with st.spinner('OCR via Google Vision...'):
+                        text = ocr_image_with_google_vision(img_bytes, GOOGLE_API_KEY)
+                        addr = extract_address_from_text(text)
+                        if addr and auto_add:
+                            existing = st.session_state.get('scanned_text','').strip()
+                            st.session_state['scanned_text'] = (existing+'\n'+addr) if existing else addr
+                            st.success(f"Adresse erkannt und hinzugefügt: {addr}")
+        except Exception as e:
+            st.error(f'Fehler bei der Verarbeitung des Kamerabildes: {e}')
 
-# ----------------- Adress-Textfelder -----------------
+# ----------------- Haupt-Textfeld -----------------
 text_input = st.text_area("Adressen (eine pro Zeile)", height=200, value=st.session_state.get('scanned_text',''))
 priority_input = st.text_area("Priorisierte Adressen (optional, werden zuerst besucht)", height=100)
 submit = st.button("Sortieren")
@@ -221,19 +238,24 @@ if not addresses:
 
 coords_map = {}
 geocode_errors = []
-geolocator = GoogleV3(api_key=GOOGLE_API_KEY)
-for line in addresses:
-    parsed = parse_latlon_line(line)
-    if parsed:
-        lat, lon, label = parsed
-        coords_map[label] = (lat, lon)
-    else:
-        try:
-            loc = geolocator.geocode(line)
-            if loc:
-                coords_map[line] = (loc.latitude, loc.longitude)
-        except Exception as e:
-            geocode_errors.append((line,str(e)))
+if not GEOPY_AVAILABLE:
+    st.error("geopy nicht installiert. pip install geopy")
+    st.stop()
+
+with st.spinner("Geokodieren..."):
+    geolocator = GoogleV3(api_key=GOOGLE_API_KEY)
+    for line in addresses:
+        parsed = parse_latlon_line(line)
+        if parsed:
+            lat, lon, label = parsed
+            coords_map[label] = (lat, lon)
+        else:
+            try:
+                loc = geolocator.geocode(line)
+                if loc:
+                    coords_map[line] = (loc.latitude, loc.longitude)
+            except Exception as e:
+                geocode_errors.append((line,str(e)))
 
 home_parsed = parse_latlon_line(home_addr)
 if home_parsed:
