@@ -5,11 +5,10 @@ import io
 import csv
 import base64
 import requests
-import hashlib
 import re
 from typing import List, Tuple
 from math import radians, sin, cos, atan2, sqrt
-import streamlit.components.v1 as components
+from PIL import Image
 
 # ----------------- Konfiguration -----------------
 HOME_ADDRESS_DEFAULT = "Rudolf-Diesel-Straße 2, 35463 Fernwald, Germany"
@@ -139,12 +138,11 @@ def geocode_address_google(address: str):
     return (loc.latitude, loc.longitude)
 
 # ----------------- Session State -----------------
-if 'scanning' not in st.session_state:
-    st.session_state['scanning'] = False
-if 'camera_image' not in st.session_state:
-    st.session_state['camera_image'] = None
 if 'scanned_text' not in st.session_state:
     st.session_state['scanned_text'] = ""
+
+if 'scanning' not in st.session_state:
+    st.session_state['scanning'] = False
 
 # ----------------- UI -----------------
 home_addr = st.text_input("Home-Adresse (Startpunkt)", value=HOME_ADDRESS_DEFAULT)
@@ -167,89 +165,36 @@ with col2:
 with col3:
     auto_add = st.checkbox("Automatisch erkannte Adresse sofort einfügen", value=True)
 
-ocr_possible = bool(GOOGLE_API_KEY)
-if not ocr_possible:
-    st.warning("GOOGLE_API_KEY nicht gesetzt. Kamera-Scan deaktiviert.")
-
 # ----------------- Kamera Input -----------------
-if st.session_state['scanning'] and ocr_possible:
-    st.markdown("**Kamera aktiv — Foto aufnehmen. Nach der Erkennung bleibt die Kamera bereit.**")
+if st.session_state['scanning']:
+    st.markdown("**Kamera aktiv — Foto aufnehmen**")
+    img_file = st.camera_input("Foto aufnehmen (Rückkamera)", key="cam_input")
 
-    camera_html = """
-    <div style="max-width:480px; margin:auto; text-align:center;">
-        <div style="overflow:hidden; max-height:320px; border:1px solid #ddd;">
-            <video id="video" autoplay playsinline style="width:100%;"></video>
-        </div>
-        <div style="margin-top:8px;">
-            <button id="capture" style="width:150px; height:40px; font-size:16px;">Foto aufnehmen</button>
-            <span id="status" style="margin-left:8px;"></span>
-        </div>
-        <canvas id="canvas" style="display:none;"></canvas>
-    </div>
-    <script>
-    (async function(){
-        const video = document.getElementById('video');
-        const canvas = document.getElementById('canvas');
-        const status = document.getElementById('status');
+    if img_file is not None:
+        # Mittlerer Bereich cropen (für OCR)
+        img = Image.open(img_file)
+        w, h = img.size
+        crop_box = (w*0.1, h*0.25, w*0.9, h*0.75)
+        img_cropped = img.crop(crop_box)
 
-        try {
-            const stream = await navigator.mediaDevices.getUserMedia({
-                video:{facingMode:{ideal:'environment'}, width:{ideal:1280}, height:{ideal:720}},
-                audio:false
-            });
-            video.srcObject = stream;
-            await video.play();
+        buf = io.BytesIO()
+        img_cropped.save(buf, format="JPEG")
+        img_bytes = buf.getvalue()
 
-            const [track] = stream.getVideoTracks();
-            const capabilities = track.getCapabilities();
-            if(capabilities.zoom){
-                track.applyConstraints({ advanced: [{ zoom: capabilities.zoom.max }] });
-            }
-            status.textContent='Kamera bereit';
-        } catch(e){status.textContent='Kamera nicht verfügbar: '+e; return;}
-
-        const captureBtn = document.getElementById('capture');
-        captureBtn.addEventListener('click', ()=>{
-            const w = video.videoWidth, h = video.videoHeight;
-            const cropW = Math.floor(w*0.8), cropH = Math.floor(h*0.5);
-            const sx = Math.floor((w-cropW)/2), sy = Math.floor((h-cropH)/2);
-            canvas.width = cropW; canvas.height = cropH;
-            const ctx = canvas.getContext('2d');
-            ctx.drawImage(video, sx, sy, cropW, cropH, 0, 0, cropW, cropH);
-            const dataUrl = canvas.toDataURL('image/jpeg',0.9);
-
-            // Streamlit-kompatible Nachricht
-            const streamlitMessage = {
-                isStreamlitMessage: true,
-                type: 'streamlit:setComponentValue',
-                value: dataUrl
-            };
-            window.parent.postMessage(streamlitMessage, '*');
-            status.textContent='Foto gesendet';
-        });
-    })();
-    </script>
-    """
-
-    # KEIN Rückgabewert abfragen! Nur rendern und JS sendet den Wert über Session State
-    components.html(camera_html, height=400, scrolling=False, key="camera_block")
-
-# ----------------- OCR Verarbeitung -----------------
-if st.session_state['camera_image']:
-    img_bytes = base64.b64decode(st.session_state['camera_image'].split(",")[1])
-    text = ocr_image_to_text(io.BytesIO(img_bytes))
-    addr = extract_address_from_text(text)
-    if addr:
-        existing = st.session_state.get('scanned_text', '').strip()
-        if existing:
-            st.session_state['scanned_text'] = existing + "\n" + addr
-        else:
-            st.session_state['scanned_text'] = addr
-        st.success(f"Adresse erkannt: {addr}")
+        # OCR ausführen
+        text = ocr_image_to_text(io.BytesIO(img_bytes))
+        addr = extract_address_from_text(text)
+        if addr:
+            existing = st.session_state.get('scanned_text', '').strip()
+            if existing:
+                st.session_state['scanned_text'] = existing + "\n" + addr
+            else:
+                st.session_state['scanned_text'] = addr
+            st.success(f"Adresse erkannt: {addr}")
 
 # ----------------- Adress-Textfeld -----------------
 text_input = st.text_area("Adressen (eine pro Zeile)", height=200, value=st.session_state.get('scanned_text', ''), placeholder="Adresse 1\nAdresse 2\n...")
-priority_input = st.text_area("Priorisierte Adressen (optional)", height=100, placeholder="Adresse A\nAdresse B\n...")
+priority_input = st.text_area("Priorisierte Adressen (optional, werden zuerst besucht)", height=100, placeholder="Adresse A\nAdresse B\n...")
 
 submit = st.button("Sortieren")
 if not submit:
@@ -296,7 +241,7 @@ with st.spinner("Geokodieren..."):
         try:
             priority_coords.append((addr, geocode_address_google(addr)))
         except Exception as e:
-            st.warning(f"Priorisierte Adresse konnte nicht geokodiert werden: {addr} → {e}")
+            st.warning(f"Priorisierte Adresse konnte nicht geokodiert werden und wird ignoriert: {addr} → {e}")
 
     remaining_coords_map = {a: coords_map[a] for a in coords_map if a not in [p[0] for p in priority_coords]}
     start_coord_nn = priority_coords[-1][1] if priority_coords else home_coord
@@ -305,7 +250,8 @@ with st.spinner("Geokodieren..."):
 
 # ----------------- Ergebnis -----------------
 st.subheader("Sortierte Adressen")
-st.text_area("Ergebnis", value="\n".join(final_route), height=250)
+st.text_area("Ergebnis (eine Adresse pro Zeile)", value="\n".join(final_route), height=250)
+
 col1, col2 = st.columns(2)
 with col1:
     st.download_button("Download .txt", data=generate_txt(final_route), file_name="sortierte_adressen.txt", mime="text/plain")
@@ -314,7 +260,7 @@ with col2:
 
 if geocode_errors:
     st.warning(f"Es gab {len(geocode_errors)} Geokodier-Fehler:")
-    for a,e in geocode_errors:
+    for a, e in geocode_errors:
         st.write(f"- {a} → {e}")
 
 st.success("Fertig — die Liste wurde sortiert.")
