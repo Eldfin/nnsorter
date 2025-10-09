@@ -155,8 +155,8 @@ if not ocr_possible:
 if st.session_state['scanning'] and ocr_possible:
     st.markdown("**Kamera aktiv — Foto aufnehmen. Nach der Erkennung bleibt die Kamera bereit.**")
     camera_html = '''
-    <div style="position:relative; max-width:360px; margin:auto;">
-        <video id="video" autoplay playsinline style="width:100%; border:1px solid #ddd;"></video>
+    <div style="position:relative; max-width:480px; margin:auto; overflow:hidden;">
+        <video id="video" autoplay playsinline style="width:100%; max-height:360px; border:1px solid #ddd;"></video>
         <div style="text-align:center; margin-top:8px;">
             <button id="capture">Foto aufnehmen</button>
             <span id="status" style="margin-left:8px;"></span>
@@ -168,11 +168,9 @@ if st.session_state['scanning'] and ocr_possible:
         const video = document.getElementById('video');
         const canvas = document.getElementById('canvas');
         const status = document.getElementById('status');
-        let stream = null;
         try {
-            // Rückkamera, moderate Auflösung
-            stream = await navigator.mediaDevices.getUserMedia({
-                video:{facingMode:{ideal:'environment'}, width:{ideal:640}, height:{ideal:480}}, 
+            const stream = await navigator.mediaDevices.getUserMedia({
+                video:{facingMode:{ideal:'environment'}, width:{ideal:1280}, height:{ideal:720}},
                 audio:false
             });
             video.srcObject = stream; await video.play();
@@ -181,19 +179,18 @@ if st.session_state['scanning'] and ocr_possible:
         
         document.getElementById('capture').addEventListener('click', ()=>{
             const w = video.videoWidth, h = video.videoHeight;
-            // Crop: mittlerer Bereich, 80% Breite, 50% Höhe
-            const cropW = Math.floor(w*0.8), cropH = Math.floor(h*0.5);
-            const sx = Math.floor((w-cropW)/2), sy = Math.floor((h-cropH)/2);
-            canvas.width = cropW; canvas.height = cropH;
+            // canvas gleich groß wie Video, Crop erfolgt serverseitig
+            canvas.width = w; canvas.height = h;
             const ctx = canvas.getContext('2d');
-            ctx.drawImage(video, sx, sy, cropW, cropH, 0, 0, cropW, cropH);
+            ctx.drawImage(video,0,0,w,h,0,0,w,h);
             const dataUrl = canvas.toDataURL('image/jpeg',0.9);
-            window.parent.postMessage({isStreamlitMessage:true, type:'streamlit:setComponentValue', value:dataUrl}, '*');
+            window.parent.postMessage({isStreamlitMessage:true,type:'streamlit:setComponentValue',value:dataUrl}, '*');
             status.textContent='Foto gesendet';
         });
     })();
     </script>
     '''
+
     img_dataurl = components.html(camera_html, height=320)
 
     if img_dataurl:
